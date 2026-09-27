@@ -4,7 +4,7 @@ import PrimaryButton from '@/Components/PrimaryButton.vue';
 import SecondaryButton from '@/Components/SecondaryButton.vue';
 import SelectInput from '@/Components/SelectInput.vue';
 import TextInput from '@/Components/TextInput.vue';
-import { formatDate, formatMoney } from '@/finance';
+import { categoryTreeOptions, formatDate, formatMoney } from '@/finance';
 import { Head, Link, router, useForm } from '@inertiajs/vue3';
 import { computed, reactive, ref, watch } from 'vue';
 
@@ -18,6 +18,13 @@ const props = defineProps({
     filters: Object,
     error: String,
 });
+
+const expenseCategoryOptions = computed(() => categoryTreeOptions(props.categories.filter((c) => c.type === 'expense')));
+const incomeCategoryOptions = computed(() => categoryTreeOptions(props.categories.filter((c) => c.type === 'income')));
+
+function categoryOptionsForType(type) {
+    return type === 'income' ? incomeCategoryOptions.value : expenseCategoryOptions.value;
+}
 
 const filters = reactive({
     from: props.filters.from ?? '',
@@ -37,6 +44,11 @@ function toggleCategoryFilter(categoryId) {
     } else {
         filters.category_ids.splice(index, 1);
     }
+    applyFilters();
+}
+
+function isolateCategoryFilter(categoryId) {
+    filters.category_ids.splice(0, filters.category_ids.length, categoryId);
     applyFilters();
 }
 
@@ -90,6 +102,7 @@ function buildRows() {
         category_id: t.category_id ?? t.suggested_category_id ?? '',
         already_classified: t.category_id ?? null,
         suggested: t.suggested_category_id ?? null,
+        recurring: t.recurring ?? false,
         include: true,
     }));
 }
@@ -260,10 +273,13 @@ function submit() {
                                         <td class="px-3 py-2 align-top">
                                             <SelectInput v-model="row.category_id" class="block w-48" :disabled="!row.include">
                                                 <option value="">Sem categoria</option>
-                                                <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                                                <option v-for="c in categoryOptionsForType(row.type)" :key="c.id" :value="c.id">{{ c.label }}</option>
                                             </SelectInput>
                                             <p v-if="row.suggested" class="mt-1 text-xs text-indigo-600">Sugerido pela IA</p>
                                             <p v-else-if="row.already_classified" class="mt-1 text-xs text-gray-500">Já categorizado</p>
+                                            <p v-if="row.recurring" class="mt-1 text-xs text-amber-600">
+                                                Recorrente · aplica a categoria em todas as ocorrências
+                                            </p>
                                         </td>
                                     </tr>
                                 </tbody>
@@ -347,6 +363,8 @@ function submit() {
                                             : 'border-gray-300 text-gray-600 hover:border-indigo-400'
                                     "
                                     @click="toggleCategoryFilter(c.id)"
+                                    @contextmenu.prevent="isolateCategoryFilter(c.id)"
+                                    title="Clique com o botão direito para mostrar só esta categoria"
                                 >
                                     {{ c.name }} ({{ c.count }})
                                 </button>
@@ -378,7 +396,10 @@ function submit() {
                             <tbody class="divide-y divide-gray-100">
                                 <tr v-for="row in group.rows" :key="row.id">
                                     <td class="px-3 py-2 align-top whitespace-nowrap text-gray-700">{{ formatDate(row.date) }}</td>
-                                    <td class="px-3 py-2 align-top text-gray-900">{{ row.description }}</td>
+                                    <td class="px-3 py-2 align-top text-gray-900">
+                                        {{ row.description }}
+                                        <span v-if="row.recurring" class="ml-1 text-xs text-amber-600">(recorrente)</span>
+                                    </td>
                                     <td class="px-3 py-2 align-top text-xs text-gray-500">{{ row.account }}</td>
                                     <td
                                         class="px-3 py-2 align-top text-right font-medium whitespace-nowrap"
@@ -393,7 +414,7 @@ function submit() {
                                             @update:model-value="(value) => updateClassifiedCategory(row, value)"
                                         >
                                             <option value="">Sem categoria</option>
-                                            <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                                            <option v-for="c in categoryOptionsForType(row.type)" :key="c.id" :value="c.id">{{ c.label }}</option>
                                         </SelectInput>
                                     </td>
                                 </tr>

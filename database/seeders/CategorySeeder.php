@@ -9,67 +9,103 @@ use Illuminate\Database\Seeder;
 class CategorySeeder extends Seeder
 {
     /**
-     * Seed default categories for every user that has none yet.
+     * Seed default categories (with subcategories) for every user that has none yet.
      */
     public function run(): void
     {
-        $expense = [
-            'Alimentação' => '#f97316',
-            'Supermercado' => '#fb923c',
-            'Restaurantes' => '#fdba74',
-            'Transporte' => '#3b82f6',
-            'Combustível' => '#60a5fa',
-            'Moradia' => '#8b5cf6',
-            'Contas de Casa' => '#a78bfa',
-            'Internet e Telefone' => '#7c3aed',
-            'Saúde' => '#ef4444',
-            'Farmácia' => '#f87171',
-            'Academia' => '#dc2626',
-            'Lazer' => '#ec4899',
-            'Viagem' => '#f472b6',
-            'Educação' => '#0ea5e9',
-            'Cursos' => '#38bdf8',
-            'Compras' => '#f59e0b',
-            'Vestuário' => '#fbbf24',
-            'Eletrônicos' => '#d97706',
-            'Assinaturas' => '#6366f1',
-            'Streaming' => '#818cf8',
-            'Pets' => '#10b981',
-            'Filhos' => '#06b6d4',
-            'Presentes' => '#e879f9',
-            'Impostos e Taxas' => '#78716c',
-            'Seguros' => '#57534e',
-            'Investimentos' => '#65a30d',
-            'Dívidas e Empréstimos' => '#b91c1c',
-            'Doações' => '#f43f5e',
-            'Outros' => '#64748b',
-        ];
-
-        $income = [
-            'Salário' => '#22c55e',
-            'Freelance' => '#14b8a6',
-            'Rendimentos' => '#84cc16',
-            'Investimentos' => '#65a30d',
-            'Aluguel Recebido' => '#0d9488',
-            'Reembolso' => '#059669',
-            'Presente Recebido' => '#e879f9',
-            'Vendas' => '#4d7c0f',
-            '13º Salário' => '#16a34a',
-            'Outros' => '#64748b',
-        ];
-
-        User::all()->each(function (User $user) use ($expense, $income) {
+        User::all()->each(function (User $user) {
             if ($user->categories()->exists()) {
                 return;
             }
 
-            foreach ($expense as $name => $color) {
-                $user->categories()->create(['name' => $name, 'type' => TransactionType::Expense, 'color' => $color]);
-            }
-
-            foreach ($income as $name => $color) {
-                $user->categories()->create(['name' => $name, 'type' => TransactionType::Income, 'color' => $color]);
-            }
+            $this->createTree($user, self::tree(TransactionType::Expense), TransactionType::Expense);
+            $this->createTree($user, self::tree(TransactionType::Income), TransactionType::Income);
         });
+    }
+
+    private function createTree(User $user, array $nodes, TransactionType $type, ?int $parentId = null): void
+    {
+        foreach ($nodes as $node) {
+            $category = $user->categories()->create([
+                'name' => $node['name'],
+                'type' => $type,
+                'color' => $node['color'],
+                'parent_id' => $parentId,
+            ]);
+
+            if (! empty($node['children'])) {
+                $this->createTree($user, $node['children'], $type, $category->id);
+            }
+        }
+    }
+
+    /**
+     * Default category tree, shared with the categories:link-subcategories
+     * command so already-seeded flat categories can be re-parented.
+     */
+    public static function tree(TransactionType $type): array
+    {
+        return $type === TransactionType::Expense ? self::expenseTree() : self::incomeTree();
+    }
+
+    private static function expenseTree(): array
+    {
+        return [
+            ['name' => 'Alimentação', 'color' => '#f97316', 'children' => [
+                ['name' => 'Supermercado', 'color' => '#fb923c'],
+                ['name' => 'Restaurantes', 'color' => '#fdba74'],
+            ]],
+            ['name' => 'Transporte', 'color' => '#3b82f6', 'children' => [
+                ['name' => 'Combustível', 'color' => '#60a5fa'],
+            ]],
+            ['name' => 'Moradia', 'color' => '#8b5cf6', 'children' => [
+                ['name' => 'Contas de Casa', 'color' => '#a78bfa'],
+                ['name' => 'Internet e Telefone', 'color' => '#7c3aed'],
+            ]],
+            ['name' => 'Saúde', 'color' => '#ef4444', 'children' => [
+                ['name' => 'Farmácia', 'color' => '#f87171'],
+                ['name' => 'Academia', 'color' => '#dc2626'],
+            ]],
+            ['name' => 'Lazer', 'color' => '#ec4899', 'children' => [
+                ['name' => 'Viagem', 'color' => '#f472b6'],
+            ]],
+            ['name' => 'Educação', 'color' => '#0ea5e9', 'children' => [
+                ['name' => 'Cursos', 'color' => '#38bdf8'],
+            ]],
+            ['name' => 'Compras', 'color' => '#f59e0b', 'children' => [
+                ['name' => 'Vestuário', 'color' => '#fbbf24'],
+                ['name' => 'Eletrônicos', 'color' => '#d97706'],
+            ]],
+            ['name' => 'Assinaturas', 'color' => '#6366f1', 'children' => [
+                ['name' => 'Streaming', 'color' => '#818cf8'],
+            ]],
+            ['name' => 'Pets', 'color' => '#10b981'],
+            ['name' => 'Filhos', 'color' => '#06b6d4'],
+            ['name' => 'Presentes', 'color' => '#e879f9'],
+            ['name' => 'Impostos e Taxas', 'color' => '#78716c'],
+            ['name' => 'Seguros', 'color' => '#57534e'],
+            ['name' => 'Investimentos', 'color' => '#65a30d'],
+            ['name' => 'Dívidas e Empréstimos', 'color' => '#b91c1c'],
+            ['name' => 'Doações', 'color' => '#f43f5e'],
+            ['name' => 'Outros', 'color' => '#64748b'],
+        ];
+    }
+
+    private static function incomeTree(): array
+    {
+        return [
+            ['name' => 'Salário', 'color' => '#22c55e', 'children' => [
+                ['name' => '13º Salário', 'color' => '#16a34a'],
+            ]],
+            ['name' => 'Freelance', 'color' => '#14b8a6'],
+            ['name' => 'Investimentos', 'color' => '#65a30d', 'children' => [
+                ['name' => 'Rendimentos', 'color' => '#84cc16'],
+                ['name' => 'Aluguel Recebido', 'color' => '#0d9488'],
+            ]],
+            ['name' => 'Reembolso', 'color' => '#059669'],
+            ['name' => 'Presente Recebido', 'color' => '#e879f9'],
+            ['name' => 'Vendas', 'color' => '#4d7c0f'],
+            ['name' => 'Outros', 'color' => '#64748b'],
+        ];
     }
 }

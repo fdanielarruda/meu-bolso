@@ -28,9 +28,36 @@ class CategoryController extends Controller
 
     public function update(StoreCategoryRequest $request, Category $category): RedirectResponse
     {
-        $category->update($request->validated());
+        $data = $request->validated();
+
+        if (($data['parent_id'] ?? null) && $this->isDescendantOf($data['parent_id'], $category)) {
+            return Redirect::back()->withErrors([
+                'parent_id' => 'Uma categoria não pode ser filha de si mesma ou de uma de suas subcategorias.',
+            ]);
+        }
+
+        $category->update($data);
 
         return Redirect::route('finance.categories.index');
+    }
+
+    private function isDescendantOf(int $candidateParentId, Category $category): bool
+    {
+        if ($candidateParentId === $category->id) {
+            return true;
+        }
+
+        $parent = Category::find($candidateParentId);
+
+        while ($parent) {
+            if ($parent->id === $category->id) {
+                return true;
+            }
+
+            $parent = $parent->parent;
+        }
+
+        return false;
     }
 
     public function destroy(Category $category): RedirectResponse

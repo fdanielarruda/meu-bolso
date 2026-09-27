@@ -7,8 +7,9 @@ import PrimaryButton from '@/Components/PrimaryButton.vue';
 import SecondaryButton from '@/Components/SecondaryButton.vue';
 import SelectInput from '@/Components/SelectInput.vue';
 import TextInput from '@/Components/TextInput.vue';
-import { formatDate, formatMoney, frequencyLabels } from '@/finance';
+import { categoryTreeOptions, formatDate, formatMoney, frequencyLabels } from '@/finance';
 import { Head, useForm } from '@inertiajs/vue3';
+import { computed } from 'vue';
 import { ref } from 'vue';
 
 const props = defineProps({
@@ -17,6 +18,8 @@ const props = defineProps({
     people: Array,
     categories: Array,
 });
+
+const categoryOptions = computed(() => categoryTreeOptions(props.categories));
 
 const showModal = ref(false);
 const editing = ref(null);
@@ -172,7 +175,7 @@ function destroy(recurring) {
                         <InputLabel for="category_id" value="Categoria" />
                         <SelectInput id="category_id" v-model="form.category_id" class="mt-1 block w-full">
                             <option value="">Sem categoria</option>
-                            <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                            <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ c.label }}</option>
                         </SelectInput>
                     </div>
 

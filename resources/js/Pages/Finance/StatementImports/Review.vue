@@ -6,7 +6,7 @@ import PrimaryButton from '@/Components/PrimaryButton.vue';
 import SecondaryButton from '@/Components/SecondaryButton.vue';
 import SelectInput from '@/Components/SelectInput.vue';
 import TextInput from '@/Components/TextInput.vue';
-import { formatMoney } from '@/finance';
+import { categoryTreeOptions, formatMoney } from '@/finance';
 import { Head, Link, useForm } from '@inertiajs/vue3';
 import { computed, reactive } from 'vue';
 
@@ -16,6 +16,8 @@ const props = defineProps({
     items: Array,
     categories: Array,
 });
+
+const categoryOptions = computed(() => categoryTreeOptions(props.categories));
 
 function buildRows() {
     return props.items.map((item) => ({
@@ -197,7 +199,7 @@ function reextract() {
                                     <td class="px-3 py-2 align-top">
                                         <SelectInput v-model="row.category_id" class="block" :disabled="!row.include || isImported">
                                             <option value="">Sem categoria</option>
-                                            <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                                            <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ c.label }}</option>
                                         </SelectInput>
                                     </td>
                                 </tr>

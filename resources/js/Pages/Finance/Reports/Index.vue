@@ -4,7 +4,7 @@ import Checkbox from '@/Components/Checkbox.vue';
 import Modal from '@/Components/Modal.vue';
 import SelectInput from '@/Components/SelectInput.vue';
 import TextInput from '@/Components/TextInput.vue';
-import { formatDate, formatMoney } from '@/finance';
+import { categoryTreeOptions, formatDate, formatMoney } from '@/finance';
 import { Head, Link, router } from '@inertiajs/vue3';
 import { computed, reactive, ref } from 'vue';
 
@@ -19,6 +19,8 @@ const props = defineProps({
     institutions: Array,
     filters: Object,
 });
+
+const categoryOptions = computed(() => categoryTreeOptions(props.categories));
 
 const filters = reactive({
     person_id: props.filters.person_id ?? '',
@@ -179,7 +181,7 @@ function openCategory(row) {
                         <label class="text-xs font-medium text-gray-500">Categoria</label>
                         <SelectInput v-model="filters.category_id" class="mt-1 block w-full" @change="applyFilters">
                             <option value="">Todas as categorias</option>
-                            <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                            <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ c.label }}</option>
                         </SelectInput>
                     </div>
 

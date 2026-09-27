@@ -32,3 +32,46 @@ export const invoiceStatusLabels = {
     closed: 'Fechada',
     paid: 'Paga',
 };
+
+export function buildCategoryTree(categories) {
+    const byParent = new Map();
+    for (const category of categories) {
+        const key = category.parent_id ?? null;
+        if (!byParent.has(key)) byParent.set(key, []);
+        byParent.get(key).push(category);
+    }
+
+    function attach(parentId) {
+        return (byParent.get(parentId) ?? []).map((category) => ({
+            ...category,
+            children: attach(category.id),
+        }));
+    }
+
+    return attach(null);
+}
+
+/**
+ * Flattens categories into depth-first order with an indented label, so any
+ * node in the tree (not just leaves) can be picked in a <select>.
+ */
+export function categoryTreeOptions(categories) {
+    const options = [];
+
+    function walk(nodes, depth) {
+        for (const node of nodes) {
+            options.push({
+                id: node.id,
+                name: node.name,
+                type: node.type,
+                depth,
+                label: `${'    '.repeat(depth)}${depth > 0 ? '↳ ' : ''}${node.name}`,
+            });
+            walk(node.children, depth + 1);
+        }
+    }
+
+    walk(buildCategoryTree(categories), 0);
+
+    return options;
+}

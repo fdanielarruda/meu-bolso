@@ -8,7 +8,7 @@ import PrimaryButton from '@/Components/PrimaryButton.vue';
 import SecondaryButton from '@/Components/SecondaryButton.vue';
 import SelectInput from '@/Components/SelectInput.vue';
 import TextInput from '@/Components/TextInput.vue';
-import { formatDate, formatMoney, invoiceStatusLabels } from '@/finance';
+import { categoryTreeOptions, formatDate, formatMoney, invoiceStatusLabels } from '@/finance';
 import { Head, Link, useForm } from '@inertiajs/vue3';
 import { computed, ref, watch } from 'vue';
 
@@ -20,6 +20,8 @@ const props = defineProps({
     accounts: Array,
     categories: Array,
 });
+
+const categoryOptions = computed(() => categoryTreeOptions(props.categories));
 
 const today = new Date().toISOString().slice(0, 10);
 
@@ -690,7 +692,7 @@ const groupedByDay = computed(() => {
                                     <InputLabel for="category_id" value="Categoria (opcional)" />
                                     <SelectInput id="category_id" v-model="form.category_id" class="mt-1 block w-full">
                                         <option value="">Sem categoria</option>
-                                        <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                                        <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ c.label }}</option>
                                     </SelectInput>
                                 </div>
                             </div>
@@ -1049,7 +1051,7 @@ const groupedByDay = computed(() => {
                         <InputLabel for="edit_category_id" value="Categoria" />
                         <SelectInput id="edit_category_id" v-model="editForm.category_id" class="mt-1 block w-full">
                             <option value="">Sem categoria</option>
-                            <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                            <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ c.label }}</option>
                         </SelectInput>
                     </div>
                 </div>

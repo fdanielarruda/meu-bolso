@@ -8,14 +8,22 @@ import SecondaryButton from '@/Components/SecondaryButton.vue';
 import SelectInput from '@/Components/SelectInput.vue';
 import TextInput from '@/Components/TextInput.vue';
 import { Head, useForm } from '@inertiajs/vue3';
+import { buildCategoryTree, categoryTreeOptions } from '@/finance';
 import { computed, ref } from 'vue';
 
 const props = defineProps({
     categories: Array,
 });
 
-const expenseCategories = computed(() => props.categories.filter((c) => c.type === 'expense'));
-const incomeCategories = computed(() => props.categories.filter((c) => c.type === 'income'));
+const expenseTree = computed(() => buildCategoryTree(props.categories.filter((c) => c.type === 'expense')));
+const incomeTree = computed(() => buildCategoryTree(props.categories.filter((c) => c.type === 'income')));
+
+function flatten(nodes, depth = 0) {
+    return nodes.flatMap((node) => [{ ...node, depth }, ...flatten(node.children, depth + 1)]);
+}
+
+const expenseList = computed(() => flatten(expenseTree.value));
+const incomeList = computed(() => flatten(incomeTree.value));
 
 const showModal = ref(false);
 const editing = ref(null);
@@ -24,12 +32,41 @@ const form = useForm({
     name: '',
     type: 'expense',
     color: '#64748b',
+    parent_id: '',
 });
 
-function openCreate(type) {
+function descendantIds(category) {
+    return category.children.flatMap((child) => [child.id, ...descendantIds(child)]);
+}
+
+const parentOptions = computed(() => {
+    const options = categoryTreeOptions(props.categories.filter((c) => c.type === form.type));
+
+    if (!editing.value) return options;
+
+    const excluded = new Set([editing.value.id, ...descendantIds(findNode(editing.value.id))]);
+
+    return options.filter((option) => !excluded.has(option.id));
+});
+
+function findNode(id) {
+    const search = (nodes) => {
+        for (const node of nodes) {
+            if (node.id === id) return node;
+            const found = search(node.children);
+            if (found) return found;
+        }
+        return null;
+    };
+
+    return search([...expenseTree.value, ...incomeTree.value]) ?? { id, children: [] };
+}
+
+function openCreate(type, parentId = '') {
     editing.value = null;
     form.reset();
     form.type = type;
+    form.parent_id = parentId;
     form.clearErrors();
     showModal.value = true;
 }
@@ -39,6 +76,7 @@ function openEdit(category) {
     form.name = category.name;
     form.type = category.type;
     form.color = category.color;
+    form.parent_id = category.parent_id ?? '';
     form.clearErrors();
     showModal.value = true;
 }
@@ -77,15 +115,20 @@ function destroy(category) {
                     </div>
                     <ul class="divide-y divide-gray-200">
                         <li
-                            v-for="category in expenseCategories"
+                            v-for="category in expenseList"
                             :key="category.id"
                             class="flex items-center justify-between px-4 py-3 sm:px-6"
+                            :style="{ paddingLeft: `${1 + category.depth * 1.5}rem` }"
                         >
                             <div class="flex items-center gap-3">
+                                <span v-if="category.depth > 0" class="text-gray-300">↳</span>
                                 <span class="h-3 w-3 rounded-full" :style="{ backgroundColor: category.color }" />
                                 <span class="text-gray-900">{{ category.name }}</span>
                             </div>
                             <div class="flex gap-3">
+                                <button class="text-sm text-gray-500 hover:text-gray-900" @click="openCreate('expense', category.id)">
+                                    + Subcategoria
+                                </button>
                                 <button class="text-sm text-indigo-600 hover:text-indigo-900" @click="openEdit(category)">Editar</button>
                                 <button class="text-sm text-red-600 hover:text-red-900" @click="destroy(category)">Remover</button>
                             </div>
@@ -100,15 +143,20 @@ function destroy(category) {
                     </div>
                     <ul class="divide-y divide-gray-200">
                         <li
-                            v-for="category in incomeCategories"
+                            v-for="category in incomeList"
                             :key="category.id"
                             class="flex items-center justify-between px-4 py-3 sm:px-6"
+                            :style="{ paddingLeft: `${1 + category.depth * 1.5}rem` }"
                         >
                             <div class="flex items-center gap-3">
+                                <span v-if="category.depth > 0" class="text-gray-300">↳</span>
                                 <span class="h-3 w-3 rounded-full" :style="{ backgroundColor: category.color }" />
                                 <span class="text-gray-900">{{ category.name }}</span>
                             </div>
                             <div class="flex gap-3">
+                                <button class="text-sm text-gray-500 hover:text-gray-900" @click="openCreate('income', category.id)">
+                                    + Subcategoria
+                                </button>
                                 <button class="text-sm text-indigo-600 hover:text-indigo-900" @click="openEdit(category)">Editar</button>
                                 <button class="text-sm text-red-600 hover:text-red-900" @click="destroy(category)">Remover</button>
                             </div>
@@ -132,11 +180,20 @@ function destroy(category) {
 
                 <div class="mt-4">
                     <InputLabel for="type" value="Tipo" />
-                    <SelectInput id="type" v-model="form.type" class="mt-1 block w-full">
+                    <SelectInput id="type" v-model="form.type" class="mt-1 block w-full" :disabled="!!editing">
                         <option value="expense">Despesa</option>
                         <option value="income">Receita</option>
                     </SelectInput>
                     <InputError class="mt-2" :message="form.errors.type" />
+                </div>
+
+                <div class="mt-4">
+                    <InputLabel for="parent_id" value="Categoria pai" />
+                    <SelectInput id="parent_id" v-model="form.parent_id" class="mt-1 block w-full">
+                        <option value="">Sem categoria pai</option>
+                        <option v-for="option in parentOptions" :key="option.id" :value="option.id">{{ option.label }}</option>
+                    </SelectInput>
+                    <InputError class="mt-2" :message="form.errors.parent_id" />
                 </div>
 
                 <div class="mt-4">

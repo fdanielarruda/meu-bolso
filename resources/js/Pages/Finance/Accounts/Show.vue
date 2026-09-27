@@ -5,8 +5,9 @@ import InputLabel from '@/Components/InputLabel.vue';
 import PrimaryButton from '@/Components/PrimaryButton.vue';
 import SelectInput from '@/Components/SelectInput.vue';
 import TextInput from '@/Components/TextInput.vue';
-import { formatDate, formatMoney } from '@/finance';
+import { categoryTreeOptions, formatDate, formatMoney } from '@/finance';
 import { Head, Link, useForm } from '@inertiajs/vue3';
+import { computed } from 'vue';
 
 const props = defineProps({
     account: Object,
@@ -14,6 +15,8 @@ const props = defineProps({
     categories: Array,
     people: Array,
 });
+
+const categoryOptions = computed(() => categoryTreeOptions(props.categories));
 
 const today = new Date().toISOString().slice(0, 10);
 
@@ -107,7 +110,7 @@ function destroyTransaction(transaction) {
                             <InputLabel for="category_id" value="Categoria" />
                             <SelectInput id="category_id" v-model="form.category_id" class="mt-1 block w-full">
                                 <option value="">Sem categoria</option>
-                                <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                                <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ c.label }}</option>
                             </SelectInput>
                         </div>
 

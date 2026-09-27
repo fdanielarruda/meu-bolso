@@ -8,7 +8,7 @@ import PrimaryButton from '@/Components/PrimaryButton.vue';
 import SecondaryButton from '@/Components/SecondaryButton.vue';
 import SelectInput from '@/Components/SelectInput.vue';
 import TextInput from '@/Components/TextInput.vue';
-import { formatDate, formatMoney } from '@/finance';
+import { categoryTreeOptions, formatDate, formatMoney } from '@/finance';
 import { Head, Link, router, useForm } from '@inertiajs/vue3';
 import { computed, reactive, ref, watch } from 'vue';
 
@@ -19,6 +19,8 @@ const props = defineProps({
     categories: Array,
     filters: Object,
 });
+
+const categoryOptions = computed(() => categoryTreeOptions(props.categories));
 
 const filters = reactive({
     institution_id: props.filters.institution_id ?? '',
@@ -285,7 +287,7 @@ const groupedByDay = computed(() => {
                             <InputLabel value="Categoria" />
                             <SelectInput v-model="filters.category_id" class="mt-1 block w-full" @change="applyFilters">
                                 <option value="">Todas as categorias</option>
-                                <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                                <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ c.label }}</option>
                             </SelectInput>
                         </div>
 
@@ -484,7 +486,7 @@ const groupedByDay = computed(() => {
                     <InputLabel for="edit_category_id" value="Categoria" />
                     <SelectInput id="edit_category_id" v-model="editForm.category_id" class="mt-1 block w-full">
                         <option value="">Sem categoria</option>
-                        <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                        <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ c.label }}</option>
                     </SelectInput>
                     <InputError class="mt-2" :message="editForm.errors.category_id" />
                 </div>

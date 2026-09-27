@@ -10,6 +10,7 @@ use App\Models\Transaction;
 use App\Services\TransactionClassification\TransactionClassifier;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Redirect;
 use Inertia\Inertia;
@@ -35,7 +36,11 @@ class TransactionClassificationController extends Controller
 
         $baseFilters = fn ($query) => $query
             ->where('user_id', Auth::id())
-            ->whereNull('transfer_id')
+            ->where(
+                fn ($transferQuery) => $transferQuery
+                    ->whereNull('transfer_id')
+                    ->orWhereHas('transfer', fn ($tq) => $tq->where('is_movement_only', false))
+            )
             ->when($kind === 'credit_card', fn ($q) => $q->whereNotNull('credit_card_invoice_id'))
             ->when($kind === 'transactions', fn ($q) => $q->whereNull('credit_card_invoice_id'))
             ->when($request->filled('from'), fn ($q) => $q->whereDate('date', '>=', $request->date('from')))
@@ -65,20 +70,24 @@ class TransactionClassificationController extends Controller
                 ->filter(fn (Category $category) => $category->transactions_count > 0)
                 ->values();
 
-            $classifiedTransactions = $baseFilters(Transaction::query())
-                ->whereNotNull('category_id')
-                ->when(! empty($categoryIds), fn ($q) => $q->whereIn('category_id', $categoryIds))
-                ->with('account')
-                ->orderByDesc('date')
-                ->limit(500)
-                ->get();
+            $classifiedTransactions = $this->dedupeByRecurrence(
+                $baseFilters(Transaction::query())
+                    ->whereNotNull('category_id')
+                    ->when(! empty($categoryIds), fn ($q) => $q->whereIn('category_id', $categoryIds))
+                    ->with('account')
+                    ->orderByDesc('date')
+                    ->limit(2000)
+                    ->get()
+            )->take(500);
         } else {
-            $transactions = $baseFilters(Transaction::query())
-                ->when($hideClassified, fn ($q) => $q->whereNull('category_id'))
-                ->with('account')
-                ->orderByDesc('date')
-                ->limit(50)
-                ->get();
+            $transactions = $this->dedupeByRecurrence(
+                $baseFilters(Transaction::query())
+                    ->when($hideClassified, fn ($q) => $q->whereNull('category_id'))
+                    ->with('account')
+                    ->orderByDesc('date')
+                    ->limit(300)
+                    ->get()
+            )->take(50);
 
             if ($request->boolean('classify')) {
                 try {
@@ -100,6 +109,7 @@ class TransactionClassificationController extends Controller
                 'account' => $transaction->account->name,
                 'category_id' => $transaction->category_id,
                 'suggested_category_id' => $suggestions[$transaction->id]['category_id'] ?? null,
+                'recurring' => $transaction->recurring_transaction_id !== null,
             ]),
             'classifiedTransactions' => $classifiedTransactions->map(fn (Transaction $transaction) => [
                 'id' => $transaction->id,
@@ -109,6 +119,7 @@ class TransactionClassificationController extends Controller
                 'amount' => (string) $transaction->amount,
                 'account' => $transaction->account->name,
                 'category_id' => $transaction->category_id,
+                'recurring' => $transaction->recurring_transaction_id !== null,
             ]),
             'classifiedCategories' => $classifiedCategories->map(fn (Category $category) => [
                 'id' => $category->id,
@@ -133,6 +144,17 @@ class TransactionClassificationController extends Controller
     }
 
     /**
+     * Keep only the most recent transaction for each recurring rule, since
+     * they all share (or will share) the same category once classified.
+     */
+    private function dedupeByRecurrence(Collection $transactions): Collection
+    {
+        return $transactions
+            ->unique(fn (Transaction $transaction) => $transaction->recurring_transaction_id ?? 'single-'.$transaction->id)
+            ->values();
+    }
+
+    /**
      * Apply the categories confirmed by the user (which may differ from the
      * AI suggestion) to each transaction.
      */
@@ -151,7 +173,21 @@ class TransactionClassificationController extends Controller
             ->keyBy('id');
 
         foreach ($data['items'] as $item) {
-            $transactions->get($item['transaction_id'])?->update(['category_id' => $item['category_id'] ?? null]);
+            $transaction = $transactions->get($item['transaction_id']);
+
+            if (! $transaction) {
+                continue;
+            }
+
+            $categoryId = $item['category_id'] ?? null;
+            $transaction->update(['category_id' => $categoryId]);
+
+            if ($transaction->recurring_transaction_id) {
+                Transaction::query()
+                    ->where('user_id', Auth::id())
+                    ->where('recurring_transaction_id', $transaction->recurring_transaction_id)
+                    ->update(['category_id' => $categoryId]);
+            }
         }
 
         return Redirect::back()
