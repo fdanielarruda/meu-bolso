@@ -22,12 +22,22 @@ const props = defineProps({
 
 const categoryOptions = computed(() => categoryTreeOptions(props.categories));
 
+function firstDayOfMonth() {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+}
+
+function lastDayOfMonth() {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+}
+
 const filters = reactive({
     institution_id: props.filters.institution_id ?? '',
     account_id: props.filters.account_id ?? '',
     category_id: props.filters.category_id ?? '',
-    from: props.filters.from ?? '',
-    to: props.filters.to ?? '',
+    from: props.filters.from ?? firstDayOfMonth(),
+    to: props.filters.to ?? lastDayOfMonth(),
     kind: props.filters.kind ?? '',
     min_amount: props.filters.min_amount ?? '',
     max_amount: props.filters.max_amount ?? '',
@@ -41,6 +51,10 @@ const accountsForFilterBank = computed(() =>
 
 function applyFilters() {
     router.get(route('finance.transactions.index'), filters, { preserveState: true, replace: true });
+}
+
+if (!props.filters.from && !props.filters.to) {
+    applyFilters();
 }
 
 watch(

@@ -191,8 +191,8 @@ async function copyAsImage() {
         </div>
 
         <Modal :show="showReceiptModal" max-width="lg" @close="showReceiptModal = false">
-            <div class="p-6">
-                <div ref="receiptContent" class="bg-white p-2">
+            <div ref="receiptContent" class="p-6">
+                <div class="bg-white p-2">
                     <h2 class="text-lg font-medium text-gray-900">Resumo · {{ monthLabel(filters.month) }}</h2>
 
                     <p v-if="receiptLoading" class="mt-4 text-sm text-gray-500">Carregando...</p>
@@ -230,19 +230,19 @@ async function copyAsImage() {
                         </div>
                     </div>
                 </div>
+            </div>
 
-                <div class="mt-6 flex justify-end gap-3">
-                    <SecondaryButton @click="showReceiptModal = false">Fechar</SecondaryButton>
-                    <SecondaryButton :disabled="receiptLoading || copyState === 'copying'" @click="copyAsImage">
-                        {{
-                            copyState === 'copied'
-                                ? 'Copiado!'
-                                : copyState === 'error'
-                                  ? 'Erro ao copiar'
-                                  : 'Copiar como imagem'
-                        }}
-                    </SecondaryButton>
-                </div>
+            <div class="flex justify-end gap-3 p-6 pt-0">
+                <SecondaryButton @click="showReceiptModal = false">Fechar</SecondaryButton>
+                <SecondaryButton :disabled="receiptLoading || copyState === 'copying'" @click="copyAsImage">
+                    {{
+                        copyState === 'copied'
+                            ? 'Copiado!'
+                            : copyState === 'error'
+                              ? 'Erro ao copiar'
+                              : 'Copiar como imagem'
+                    }}
+                </SecondaryButton>
             </div>
         </Modal>
     </AuthenticatedLayout>
