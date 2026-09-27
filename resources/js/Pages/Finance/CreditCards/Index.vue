@@ -9,13 +9,15 @@ import SelectInput from '@/Components/SelectInput.vue';
 import TextInput from '@/Components/TextInput.vue';
 import { formatDate, formatMoney } from '@/finance';
 import { Head, Link, router, useForm } from '@inertiajs/vue3';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 
 const props = defineProps({
     cards: Array,
     institutions: Array,
     month: String,
 });
+
+const visibleCards = computed(() => props.cards.filter((card) => !card.not_started));
 
 function addMonths(monthString, delta) {
     const [year, month] = monthString.split('-').map(Number);
@@ -43,6 +45,7 @@ const form = useForm({
     credit_limit: '',
     closing_day: '',
     due_day: '',
+    starts_at: '',
 });
 
 function openCreate() {
@@ -60,12 +63,15 @@ function openEdit(card) {
     form.credit_limit = card.credit_limit;
     form.closing_day = String(card.closing_day);
     form.due_day = String(card.due_day);
+    form.starts_at = card.starts_at ?? '';
     form.clearErrors();
     showModal.value = true;
 }
 
 function submit() {
     const options = { preserveScroll: true, onSuccess: () => (showModal.value = false) };
+
+    form.transform((data) => ({ ...data, starts_at: data.starts_at ? `${data.starts_at}-01` : null }));
 
     if (editing.value) {
         form.put(route('finance.credit-cards.update', editing.value.id), options);
@@ -109,7 +115,7 @@ function submit() {
                 </div>
 
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div v-for="card in cards" :key="card.id" class="rounded-lg bg-white p-5 shadow">
+                    <div v-for="card in visibleCards" :key="card.id" class="rounded-lg bg-white p-5 shadow">
                         <div class="flex items-start justify-between">
                             <Link :href="route('finance.invoices.show', card.current_invoice_id)" class="hover:text-indigo-600">
                                 <p class="flex items-center gap-2 text-sm text-gray-500">
@@ -131,7 +137,7 @@ function submit() {
                         </p>
                     </div>
 
-                    <p v-if="cards.length === 0" class="text-sm text-gray-500">
+                    <p v-if="visibleCards.length === 0" class="text-sm text-gray-500">
                         Nenhum cartão de crédito cadastrado ainda.
                     </p>
                 </div>
@@ -198,6 +204,12 @@ function submit() {
                             required
                         />
                         <InputError class="mt-2" :message="form.errors.due_day" />
+                    </div>
+
+                    <div>
+                        <InputLabel for="starts_at" value="Começa a contar em" />
+                        <TextInput id="starts_at" v-model="form.starts_at" type="month" class="mt-1 block w-full" />
+                        <InputError class="mt-2" :message="form.errors.starts_at" />
                     </div>
                 </div>
 

@@ -51,11 +51,15 @@ class TransactionController extends Controller
                     ? $q->where('institution_id', $institutionId)
                     : $q->whereNull('institution_id');
             })
-            ->with(['account', 'category'])
+            ->with(['account', 'category', 'transfer.fromAccount', 'transfer.toAccount'])
             ->orderByDesc('date')
             ->orderByDesc('id')
-            ->limit(10)
-            ->get();
+            ->limit(50)
+            ->get()
+            ->reject(fn (Transaction $transaction) => $transaction->transfer
+                && $transaction->transfer->fromAccount?->institution_id === $transaction->transfer->toAccount?->institution_id)
+            ->take(10)
+            ->values();
 
         return response()->json(['transactions' => $transactions]);
     }
@@ -105,6 +109,7 @@ class TransactionController extends Controller
             'type' => $data['type'],
             'description' => $data['description'] ?: 'Desconhecido',
             'is_unknown' => $isUnknown,
+            'exclude_from_reports' => (bool) ($data['exclude_from_reports'] ?? false),
             'amount' => $data['amount'],
             'date' => $data['date'],
         ]);
@@ -129,6 +134,7 @@ class TransactionController extends Controller
             'type' => $data['type'],
             'description' => $data['description'] ?: 'Desconhecido',
             'is_unknown' => $isUnknown,
+            'exclude_from_reports' => (bool) ($data['exclude_from_reports'] ?? false),
             'amount' => $data['amount'],
             'date' => $data['date'],
         ]);

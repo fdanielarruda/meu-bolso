@@ -29,7 +29,8 @@ class CreditCardController extends Controller
 
         $cards = $userCards
             ->map(function (CreditCard $card) use ($month) {
-                $invoice = $card->invoiceForMonth($month);
+                $notStarted = $card->isBeforeStartMonth($month);
+                $invoice = $notStarted ? null : $card->invoiceForMonth($month);
 
                 return [
                     'id' => $card->id,
@@ -39,11 +40,13 @@ class CreditCardController extends Controller
                     'closing_day' => $card->closing_day,
                     'due_day' => $card->due_day,
                     'payment_account_id' => $card->payment_account_id,
-                    'open_invoice_total' => $invoice->total(),
+                    'starts_at' => $card->starts_at?->format('Y-m'),
+                    'not_started' => $notStarted,
+                    'open_invoice_total' => $invoice?->total() ?? '0.00',
                     'available_limit' => $card->availableLimit(),
-                    'current_invoice_id' => $invoice->id,
-                    'due_date' => $invoice->due_date,
-                    'invoice_status' => $invoice->status,
+                    'current_invoice_id' => $invoice?->id,
+                    'due_date' => $invoice?->due_date,
+                    'invoice_status' => $invoice?->status,
                 ];
             });
 
@@ -65,11 +68,13 @@ class CreditCardController extends Controller
     {
         $currentMonth = \Illuminate\Support\Carbon::now()->startOfMonth();
 
-        if ($cards->isEmpty()) {
+        $startedCards = $cards->reject(fn (CreditCard $card) => $card->isBeforeStartMonth($currentMonth));
+
+        if ($startedCards->isEmpty()) {
             return $currentMonth;
         }
 
-        $allPaid = $cards->every(
+        $allPaid = $startedCards->every(
             fn (CreditCard $card) => $card->invoiceForMonth($currentMonth)->status === \App\Enums\InvoiceStatus::Paid
         );
 

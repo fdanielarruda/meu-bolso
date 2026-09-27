@@ -13,7 +13,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['user_id', 'institution_id', 'name', 'payment_account_id', 'credit_limit', 'closing_day', 'due_day'])]
+#[Fillable(['user_id', 'institution_id', 'name', 'payment_account_id', 'credit_limit', 'closing_day', 'due_day', 'starts_at'])]
 class CreditCard extends Model
 {
     use BelongsToUser, HasFactory;
@@ -22,6 +22,7 @@ class CreditCard extends Model
     {
         return [
             'credit_limit' => 'decimal:2',
+            'starts_at' => 'date',
         ];
     }
 
@@ -95,6 +96,15 @@ class CreditCard extends Model
     public function currentInvoice(): ?CreditCardInvoice
     {
         return $this->resolveInvoiceFor(Carbon::now());
+    }
+
+    /**
+     * Whether the given month is before this card's configured starting
+     * month, i.e. a month whose invoice shouldn't be generated/navigable.
+     */
+    public function isBeforeStartMonth(CarbonInterface $month): bool
+    {
+        return $this->starts_at && $month->copy()->startOfMonth()->lt($this->starts_at->copy()->startOfMonth());
     }
 
     private function dayInMonth(CarbonInterface $month, int $day): string

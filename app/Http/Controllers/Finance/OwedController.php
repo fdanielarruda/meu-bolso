@@ -73,4 +73,69 @@ class OwedController extends Controller
             ],
         ]);
     }
+
+    /**
+     * General "notinha" (receipt) for a person/month: a flat list combining
+     * every card's invoice items (description, installment x/y, amount)
+     * with every account's balance as its own line, plus the grand total —
+     * no grouping by bank/card, just the whole picture in one note.
+     */
+    public function receipt(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $month = $request->filled('month') ? $request->input('month') : now()->format('Y-m');
+        $monthStart = Carbon::parse($month.'-01')->startOfMonth();
+        $personId = $request->integer('person_id') ?: null;
+
+        $items = CreditCard::where('user_id', $request->user()->id)
+            ->get()
+            ->flatMap(function (CreditCard $card) use ($monthStart, $personId) {
+                $invoice = $card->invoices()->where('reference_month', $monthStart->toDateString())->first();
+
+                if (! $invoice) {
+                    return collect();
+                }
+
+                return $invoice->transactions()
+                    ->when($personId, fn ($q) => $q->whereHas('account', fn ($accountQuery) => $accountQuery->where('person_id', $personId)))
+                    ->where('reversed', false)
+                    ->orderBy('date')
+                    ->orderBy('installment_number')
+                    ->orderBy('id')
+                    ->get()
+                    ->map(fn ($transaction) => [
+                        'description' => $transaction->description,
+                        'installment_number' => $transaction->installment_number,
+                        'installment_total' => $transaction->installment_total,
+                        'amount' => $transaction->amount,
+                    ]);
+            })
+            ->values();
+
+        $accountsBalance = Account::where('type', '!=', AccountType::CreditCard)
+            ->whereNull('archived_at')
+            ->when($personId, fn ($q) => $q->where('person_id', $personId))
+            ->get()
+            ->reduce(fn ($carry, Account $account) => Money::add($carry, $account->balance()), '0.00');
+
+        // A negative account balance means the person owes money (they
+        // spent from an account funded/owned by the user), so it flips to a
+        // positive "owed to me" amount here — the inverse of how the
+        // balance itself is displayed everywhere else in the app.
+        $accountsOwed = Money::sub('0.00', $accountsBalance);
+
+        $accountItems = $accountsOwed !== '0.00'
+            ? collect([[
+                'description' => 'Contas correntes',
+                'installment_number' => null,
+                'installment_total' => null,
+                'amount' => $accountsOwed,
+            ]])
+            : collect();
+
+        $items = $items->concat($accountItems)->values();
+
+        $total = $items->reduce(fn ($carry, $item) => Money::add($carry, (string) $item['amount']), '0.00');
+
+        return response()->json(['items' => $items, 'total' => $total]);
+    }
 }

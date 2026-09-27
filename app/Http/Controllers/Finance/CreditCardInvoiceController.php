@@ -33,7 +33,10 @@ class CreditCardInvoiceController extends Controller
         $invoice->load(['creditCard.institution', 'creditCard.paymentAccount']);
 
         $creditCard = $invoice->creditCard;
-        $prevInvoice = $creditCard->invoiceForMonth($invoice->reference_month->copy()->subMonthNoOverflow());
+        abort_if($creditCard->isBeforeStartMonth($invoice->reference_month), HttpResponse::HTTP_FORBIDDEN);
+
+        $prevMonth = $invoice->reference_month->copy()->subMonthNoOverflow();
+        $prevInvoice = $creditCard->isBeforeStartMonth($prevMonth) ? null : $creditCard->invoiceForMonth($prevMonth);
         $nextMonth = $invoice->reference_month->copy()->addMonthNoOverflow();
         $nextInvoice = $nextMonth->lte(Transaction::recurringCapMonth()) ? $creditCard->invoiceForMonth($nextMonth) : null;
 
@@ -42,7 +45,7 @@ class CreditCardInvoiceController extends Controller
                 ...$invoice->toArray(),
                 'total' => $invoice->total(),
             ],
-            'prevInvoiceId' => $prevInvoice->id,
+            'prevInvoiceId' => $prevInvoice?->id,
             'nextInvoiceId' => $nextInvoice?->id,
             'transactions' => $invoice->transactions()
                 ->with(['account.institution', 'account.person', 'category'])
@@ -186,6 +189,16 @@ class CreditCardInvoiceController extends Controller
         $targets = $this->scopedInstallments($transaction, $scope);
         $invoiceId = $transaction->credit_card_invoice_id;
 
+        // Each person's share needs its own chain id, reused across every
+        // month/target so "future"/"all" edits and deletes can later walk
+        // that one person's shares across months (see scopedInstallments()).
+        // Without this, every share created here would be a same-month-only
+        // split with no cross-month link, so "future"/"all" would silently
+        // collapse into "this" for a purchase that was split after the fact.
+        $groupIds = $transaction->installment_group_id
+            ? array_map(fn () => (string) Str::ulid(), $data['split'])
+            : array_fill(0, count($data['split']), null);
+
         foreach ($targets as $target) {
             $targetShares = Money::scaleShares($shareAmounts, (string) $transaction->amount, (string) $target->amount);
             $splitGroupId = (string) Str::ulid();
@@ -201,6 +214,7 @@ class CreditCardInvoiceController extends Controller
                     'is_unknown' => $target->is_unknown,
                     'amount' => $targetShares[$index],
                     'date' => $target->date,
+                    'installment_group_id' => $groupIds[$index],
                     'installment_number' => $target->installment_number,
                     'installment_total' => $target->installment_total,
                     'is_recurring' => $target->is_recurring,

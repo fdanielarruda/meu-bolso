@@ -1,10 +1,13 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+import Modal from '@/Components/Modal.vue';
+import SecondaryButton from '@/Components/SecondaryButton.vue';
 import SelectInput from '@/Components/SelectInput.vue';
 import TextInput from '@/Components/TextInput.vue';
 import { formatDate, formatMoney } from '@/finance';
 import { Head, Link, router } from '@inertiajs/vue3';
-import { computed, reactive } from 'vue';
+import html2canvas from 'html2canvas';
+import { computed, reactive, ref } from 'vue';
 
 const props = defineProps({
     accounts: Array,
@@ -26,6 +29,15 @@ function bankLabel(entity) {
     return entity.institution?.name ?? 'Dinheiro';
 }
 
+function monthLabel(monthString) {
+    const [year, month] = monthString.split('-').map(Number);
+
+    return new Date(Date.UTC(year, month - 1, 1))
+        .toLocaleDateString('pt-BR', { month: 'short', year: '2-digit', timeZone: 'UTC' })
+        .replace('.', '')
+        .replace(/^\w/, (c) => c.toUpperCase());
+}
+
 const accountsTotal = computed(() =>
     props.accounts.reduce((sum, a) => sum + Number(a.balance), 0)
 );
@@ -33,6 +45,47 @@ const accountsTotal = computed(() =>
 const cardsTotal = computed(() =>
     props.cards.reduce((sum, c) => sum + Number(c.total), 0)
 );
+
+const showReceiptModal = ref(false);
+const receiptItems = ref([]);
+const receiptTotal = ref('0.00');
+const receiptLoading = ref(false);
+const receiptContent = ref(null);
+const copyState = ref('idle');
+
+function openReceipt() {
+    receiptItems.value = [];
+    receiptTotal.value = '0.00';
+    receiptLoading.value = true;
+    showReceiptModal.value = true;
+
+    window.axios
+        .get(route('finance.owed.receipt'), { params: { person_id: filters.person_id || null, month: filters.month || null } })
+        .then((response) => {
+            receiptItems.value = response.data.items;
+            receiptTotal.value = response.data.total;
+        })
+        .finally(() => (receiptLoading.value = false));
+}
+
+async function copyAsImage() {
+    if (!receiptContent.value) return;
+
+    copyState.value = 'copying';
+
+    try {
+        const canvas = await html2canvas(receiptContent.value, { backgroundColor: '#ffffff', scale: 2 });
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        copyState.value = 'copied';
+    } catch (error) {
+        console.error(error);
+        copyState.value = 'error';
+    } finally {
+        setTimeout(() => (copyState.value = 'idle'), 2000);
+    }
+}
 </script>
 
 <template>
@@ -40,7 +93,10 @@ const cardsTotal = computed(() =>
 
     <AuthenticatedLayout>
         <template #header>
-            <h2 class="text-xl font-semibold leading-tight text-gray-800">Quanto me devem</h2>
+            <div class="flex items-center justify-between">
+                <h2 class="text-xl font-semibold leading-tight text-gray-800">Quanto me devem</h2>
+                <SecondaryButton @click="openReceipt">Resumo</SecondaryButton>
+            </div>
         </template>
 
         <div class="py-12">
@@ -133,5 +189,61 @@ const cardsTotal = computed(() =>
                 </div>
             </div>
         </div>
+
+        <Modal :show="showReceiptModal" max-width="lg" @close="showReceiptModal = false">
+            <div class="p-6">
+                <div ref="receiptContent" class="bg-white p-2">
+                    <h2 class="text-lg font-medium text-gray-900">Resumo · {{ monthLabel(filters.month) }}</h2>
+
+                    <p v-if="receiptLoading" class="mt-4 text-sm text-gray-500">Carregando...</p>
+
+                    <div v-else class="mt-4 space-y-4">
+                        <ul class="divide-y divide-gray-100">
+                            <li
+                                v-for="(item, index) in receiptItems"
+                                :key="index"
+                                class="flex items-center justify-between py-1.5 text-sm"
+                            >
+                                <span class="text-gray-700">
+                                    {{ item.description }}
+                                    <span v-if="item.installment_total" class="text-xs text-gray-500">
+                                        ({{ item.installment_number }}/{{ item.installment_total }})
+                                    </span>
+                                </span>
+                                <span class="font-medium" :class="Number(item.amount) < 0 ? 'text-red-600' : 'text-gray-900'">
+                                    {{ formatMoney(item.amount) }}
+                                </span>
+                            </li>
+                            <li v-if="receiptItems.length === 0" class="py-4 text-sm text-gray-500">
+                                Nada a mostrar para este filtro.
+                            </li>
+                        </ul>
+
+                        <div class="flex items-center justify-between border-t pt-3">
+                            <span class="text-sm font-semibold text-gray-900">Total geral</span>
+                            <span
+                                class="text-lg font-semibold"
+                                :class="Number(receiptTotal) < 0 ? 'text-red-600' : 'text-gray-900'"
+                            >
+                                {{ formatMoney(receiptTotal) }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-6 flex justify-end gap-3">
+                    <SecondaryButton @click="showReceiptModal = false">Fechar</SecondaryButton>
+                    <SecondaryButton :disabled="receiptLoading || copyState === 'copying'" @click="copyAsImage">
+                        {{
+                            copyState === 'copied'
+                                ? 'Copiado!'
+                                : copyState === 'error'
+                                  ? 'Erro ao copiar'
+                                  : 'Copiar como imagem'
+                        }}
+                    </SecondaryButton>
+                </div>
+            </div>
+        </Modal>
     </AuthenticatedLayout>
 </template>

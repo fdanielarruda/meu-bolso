@@ -14,7 +14,7 @@ use Illuminate\Support\Str;
 
 #[Fillable([
     'user_id', 'account_id', 'category_id', 'credit_card_invoice_id', 'recurring_transaction_id',
-    'invoice_payment_id', 'transfer_id', 'type', 'description', 'is_unknown', 'reversed', 'amount', 'date',
+    'invoice_payment_id', 'transfer_id', 'type', 'description', 'is_unknown', 'exclude_from_reports', 'reversed', 'amount', 'date',
     'installment_group_id', 'installment_number', 'installment_total', 'is_recurring', 'split_group_id',
 ])]
 class Transaction extends Model
@@ -35,6 +35,7 @@ class Transaction extends Model
             'amount' => 'decimal:2',
             'date' => 'date',
             'is_unknown' => 'boolean',
+            'exclude_from_reports' => 'boolean',
             'reversed' => 'boolean',
             'is_recurring' => 'boolean',
         ];

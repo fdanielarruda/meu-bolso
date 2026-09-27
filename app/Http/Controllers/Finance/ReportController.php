@@ -32,6 +32,7 @@ class ReportController extends Controller
         // invoice month for any card transaction they include.
         $baseQuery = fn () => Transaction::query()
             ->where('user_id', Auth::id())
+            ->where('exclude_from_reports', false)
             ->when(
                 $view === 'credit_card',
                 fn ($q) => $q->whereHas(

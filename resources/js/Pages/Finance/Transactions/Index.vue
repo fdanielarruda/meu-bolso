@@ -67,6 +67,7 @@ const editForm = useForm({
     type: 'expense',
     description: '',
     is_unknown: false,
+    exclude_from_reports: false,
     amount: '',
     date: '',
 });
@@ -116,6 +117,7 @@ function openEdit(transaction) {
     editForm.type = transaction.type;
     editForm.description = transaction.description;
     editForm.is_unknown = transaction.is_unknown;
+    editForm.exclude_from_reports = transaction.exclude_from_reports;
     editForm.amount = transaction.amount;
     editForm.date = transaction.date.slice(0, 10);
     editForm.clearErrors();
@@ -372,6 +374,12 @@ const groupedByDay = computed(() => {
                                             Não conta no relatório
                                         </span>
                                         <span
+                                            v-if="transaction.exclude_from_reports"
+                                            class="ml-1 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-gray-600"
+                                        >
+                                            Não conta no relatório
+                                        </span>
+                                        <span
                                             v-if="transaction.invoice_payment_id"
                                             class="ml-1 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-gray-600"
                                         >
@@ -489,6 +497,13 @@ const groupedByDay = computed(() => {
                         <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ c.label }}</option>
                     </SelectInput>
                     <InputError class="mt-2" :message="editForm.errors.category_id" />
+                </div>
+
+                <div class="col-span-2">
+                    <label class="flex items-center gap-2 text-sm text-gray-600">
+                        <Checkbox v-model:checked="editForm.exclude_from_reports" />
+                        Desconsiderar dos relatórios
+                    </label>
                 </div>
             </div>
 

@@ -32,6 +32,7 @@ class StoreCreditCardRequest extends FormRequest
             'closing_day' => ['required', 'integer', 'between:1,31'],
             'due_day' => ['required', 'integer', 'between:1,31'],
             'payment_account_id' => ['nullable', Rule::exists('accounts', 'id')->where('user_id', $userId)],
+            'starts_at' => ['nullable', 'date'],
         ];
     }
 }

@@ -32,6 +32,7 @@ Route::middleware(['auth', 'verified'])->prefix('finance')->name('finance.')->gr
     Route::get('reports', [ReportController::class, 'index'])->name('reports.index');
 
     Route::get('owed', [OwedController::class, 'index'])->name('owed.index');
+    Route::get('owed/receipt', [OwedController::class, 'receipt'])->name('owed.receipt');
 
     Route::resource('transfers', TransferController::class)->only(['index', 'store', 'update', 'destroy'])->names('transfers');
 

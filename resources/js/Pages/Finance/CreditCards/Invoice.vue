@@ -581,12 +581,20 @@ const groupedByDay = computed(() => {
 
                 <div class="flex items-center gap-2">
                     <Link
+                        v-if="prevInvoiceId"
                         :href="route('finance.invoices.show', prevInvoiceId)"
                         class="flex h-9 w-9 items-center justify-center rounded-md border border-gray-300 text-gray-600 hover:bg-gray-50"
                         title="Fatura anterior"
                     >
                         ←
                     </Link>
+                    <span
+                        v-else
+                        class="flex h-9 w-9 items-center justify-center rounded-md border border-gray-200 text-gray-300"
+                        title="Início do cartão"
+                    >
+                        ←
+                    </span>
                     <span class="min-w-[9rem] text-center text-sm font-semibold capitalize text-gray-700">
                         {{ monthLabel(invoice.reference_month) }}
                     </span>
@@ -1379,7 +1387,7 @@ const groupedByDay = computed(() => {
     <Modal :show="showDeleteModal" max-width="md" @close="showDeleteModal = false">
         <div class="p-6">
             <h2 class="text-lg font-medium text-gray-900">Excluir parcela</h2>
-            <p v-if="deleting?.split_group_id" class="mt-2 text-sm text-gray-600">
+            <p v-if="deleting?.split_group_id && !deleting?.installment_group_id" class="mt-2 text-sm text-gray-600">
                 Esta compra é dividida entre pessoas. Excluir apenas esta parte, ou todas as partes desta divisão?
                 "Esta e as próximas" e "Todas" têm o mesmo efeito aqui.
             </p>
