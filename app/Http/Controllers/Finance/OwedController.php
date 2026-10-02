@@ -22,7 +22,7 @@ class OwedController extends Controller
         $personId = $request->integer('person_id') ?: null;
 
         $accounts = Account::with(['institution', 'person'])
-            ->where('type', '!=', AccountType::CreditCard)
+            ->whereNotIn('type', [AccountType::CreditCard, AccountType::Investment])
             ->whereNull('archived_at')
             ->when($personId, fn ($q) => $q->where('person_id', $personId))
             ->orderBy('name')
@@ -111,7 +111,7 @@ class OwedController extends Controller
             })
             ->values();
 
-        $accountsBalance = Account::where('type', '!=', AccountType::CreditCard)
+        $accountsBalance = Account::whereNotIn('type', [AccountType::CreditCard, AccountType::Investment])
             ->whereNull('archived_at')
             ->when($personId, fn ($q) => $q->where('person_id', $personId))
             ->get()
