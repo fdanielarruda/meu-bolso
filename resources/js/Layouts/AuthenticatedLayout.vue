@@ -28,6 +28,7 @@ const mainLinks = [
     },
     { label: 'Importar fatura', route: 'finance.statement-imports.create', active: 'finance.statement-imports.*' },
     { label: 'Transferências', route: 'finance.transfers.index', active: 'finance.transfers.*' },
+    { label: 'Trocas', route: 'finance.swaps.index', active: 'finance.swaps.*' },
     { label: 'Classificar com IA', route: 'finance.transaction-classification.index', active: 'finance.transaction-classification.*' },
     { label: 'Recorrências', route: 'finance.recurring.index', active: 'finance.recurring.*' },
 ];

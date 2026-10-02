@@ -10,6 +10,7 @@ use App\Http\Controllers\Finance\PersonController;
 use App\Http\Controllers\Finance\RecurringTransactionController;
 use App\Http\Controllers\Finance\ReportController;
 use App\Http\Controllers\Finance\StatementImportController;
+use App\Http\Controllers\Finance\SwapController;
 use App\Http\Controllers\Finance\TransactionClassificationController;
 use App\Http\Controllers\Finance\TransactionController;
 use App\Http\Controllers\Finance\TransferController;
@@ -35,6 +36,9 @@ Route::middleware(['auth', 'verified'])->prefix('finance')->name('finance.')->gr
     Route::get('owed/receipt', [OwedController::class, 'receipt'])->name('owed.receipt');
 
     Route::resource('transfers', TransferController::class)->only(['index', 'store', 'update', 'destroy'])->names('transfers');
+
+    Route::get('swaps', [SwapController::class, 'index'])->name('swaps.index');
+    Route::post('swaps', [SwapController::class, 'store'])->name('swaps.store');
 
     Route::resource('recurring', RecurringTransactionController::class)->except(['show', 'create', 'edit'])->names('recurring');
 
