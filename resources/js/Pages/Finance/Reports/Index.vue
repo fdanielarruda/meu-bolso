@@ -131,7 +131,7 @@ const selectedCategoryTransactions = computed(() => {
         return hasSelectedCategory.value ? t.category_id === selectedCategory.value?.id : !t.category_id;
     });
 
-    return [...transactions].sort((a, b) => b.date.localeCompare(a.date));
+    return [...transactions].sort((a, b) => Number(b.amount) - Number(a.amount));
 });
 
 function openCategory(row) {
