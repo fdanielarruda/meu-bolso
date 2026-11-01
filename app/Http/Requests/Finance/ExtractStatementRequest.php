@@ -21,9 +21,14 @@ class ExtractStatementRequest extends FormRequest
         $userId = $this->user()->id;
 
         return [
-            'account_id' => [
-                'required',
-                Rule::exists('accounts', 'id')->where('user_id', $userId)->where('type', 'credit_card'),
+            'kind' => ['required', Rule::in(['credit', 'debit'])],
+            'institution_id' => ['required', Rule::exists('institutions', 'id')],
+            'credit_card_id' => [
+                'required_if:kind,credit',
+                'nullable',
+                Rule::exists('credit_cards', 'id')
+                    ->where('user_id', $userId)
+                    ->where('institution_id', $this->input('institution_id')),
             ],
             'file' => ['required', 'file', 'mimes:pdf', 'max:15360'],
         ];

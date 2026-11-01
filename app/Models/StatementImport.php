@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 #[Fillable([
-    'user_id', 'account_id', 'original_filename', 'file_path',
+    'user_id', 'kind', 'institution_id', 'credit_card_id', 'reference_month', 'account_id', 'original_filename', 'file_path',
     'status', 'items', 'error_message', 'extracted_at', 'imported_at',
 ])]
 class StatementImport extends Model
@@ -22,9 +22,20 @@ class StatementImport extends Model
         return [
             'status' => StatementImportStatus::class,
             'items' => 'array',
+            'reference_month' => 'date',
             'extracted_at' => 'datetime',
             'imported_at' => 'datetime',
         ];
+    }
+
+    public function institution(): BelongsTo
+    {
+        return $this->belongsTo(Institution::class);
+    }
+
+    public function creditCard(): BelongsTo
+    {
+        return $this->belongsTo(CreditCard::class);
     }
 
     public function account(): BelongsTo

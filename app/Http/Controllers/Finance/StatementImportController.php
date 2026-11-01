@@ -2,16 +2,22 @@
 
 namespace App\Http\Controllers\Finance;
 
+use App\Enums\AccountType;
 use App\Enums\StatementImportStatus;
+use App\Enums\TransactionType;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Finance\ExtractStatementRequest;
 use App\Http\Requests\Finance\StoreStatementImportRequest;
 use App\Models\Account;
 use App\Models\Category;
+use App\Models\CreditCard;
+use App\Models\Institution;
 use App\Models\StatementImport;
 use App\Models\Transaction;
 use App\Services\StatementImport\StatementExtractor;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redirect;
 use Illuminate\Support\Facades\Storage;
@@ -26,7 +32,8 @@ class StatementImportController extends Controller
     public function create(): Response
     {
         return Inertia::render('Finance/StatementImports/Create', [
-            'accounts' => Account::whereNull('archived_at')->where('type', 'credit_card')->orderBy('name')->get(),
+            'institutions' => Institution::orderBy('name')->get(['id', 'name']),
+            'creditCards' => CreditCard::orderBy('name')->get(['id', 'name', 'institution_id']),
         ]);
     }
 
@@ -47,7 +54,9 @@ class StatementImportController extends Controller
 
         $import = StatementImport::create([
             'user_id' => $request->user()->id,
-            'account_id' => $data['account_id'],
+            'kind' => $data['kind'],
+            'institution_id' => $data['institution_id'],
+            'credit_card_id' => $data['kind'] === 'credit' ? $data['credit_card_id'] : null,
             'original_filename' => $file->getClientOriginalName(),
             'file_path' => $path,
             'status' => StatementImportStatus::Processing,
@@ -60,21 +69,28 @@ class StatementImportController extends Controller
 
     public function show(StatementImport $statementImport): Response
     {
-        $statementImport->load('account');
+        $statementImport->load(['institution', 'creditCard']);
+
+        $isReviewable = $statementImport->status === StatementImportStatus::Extracted;
+        $owners = $this->ownerAccounts($statementImport);
 
         return Inertia::render('Finance/StatementImports/Review', [
             'statementImport' => [
                 'id' => $statementImport->id,
+                'kind' => $statementImport->kind,
                 'status' => $statementImport->status->value,
                 'status_label' => $statementImport->status->label(),
                 'original_filename' => $statementImport->original_filename,
                 'error_message' => $statementImport->error_message,
                 'imported_at' => $statementImport->imported_at,
+                'reference_month' => $statementImport->reference_month?->format('Y-m'),
+                'institution' => $statementImport->institution?->only(['id', 'name']),
+                'credit_card' => $statementImport->creditCard?->only(['id', 'name', 'payment_account_id']),
             ],
-            'account' => $statementImport->account->only(['id', 'name']),
-            'items' => $statementImport->status === StatementImportStatus::Extracted
-                ? $this->flagDuplicates($statementImport->account, $statementImport->items ?? [])
+            'items' => $isReviewable
+                ? $this->flagDuplicates($statementImport, $statementImport->items ?? [])
                 : ($statementImport->items ?? []),
+            'owners' => $owners,
             'categories' => Category::orderBy('name')->get(),
         ]);
     }
@@ -98,28 +114,63 @@ class StatementImportController extends Controller
 
         $data = $request->validated();
         $userId = $request->user()->id;
+        $isCredit = $statementImport->kind === 'credit';
 
-        DB::transaction(function () use ($data, $userId, $statementImport) {
+        $invoice = null;
+
+        if ($isCredit) {
+            $card = $statementImport->creditCard;
+            abort_unless($card, HttpResponse::HTTP_UNPROCESSABLE_ENTITY, 'Cartão não encontrado para esta importação.');
+
+            $month = ! empty($data['reference_month'])
+                ? Carbon::parse($data['reference_month'].'-01')
+                : $card->resolveInvoiceFor(Carbon::parse(collect($data['items'])->max('date')))->reference_month;
+
+            abort_if($card->isBeforeStartMonth($month), HttpResponse::HTTP_UNPROCESSABLE_ENTITY, 'Este mês é anterior ao início do cartão.');
+
+            $invoice = $card->invoiceForMonth($month);
+        }
+
+        DB::transaction(function () use ($data, $userId, $statementImport, $invoice, $isCredit) {
             foreach ($data['items'] as $item) {
-                Transaction::createPurchase([
+                $attributes = [
                     'user_id' => $userId,
-                    'account_id' => $statementImport->account_id,
+                    'account_id' => $item['account_id'],
                     'category_id' => $item['category_id'] ?? null,
-                    'type' => $item['type'],
                     'description' => $item['description'],
                     'amount' => $item['amount'],
                     'date' => $item['date'],
-                ], installments: $item['installment_total'] ?? 1);
+                ];
+
+                if ($isCredit) {
+                    // Cards only hold expenses; a statement credit is a reversed charge.
+                    Transaction::createInstallmentsForInvoice(
+                        [
+                            ...$attributes,
+                            'type' => TransactionType::Expense,
+                            'reversed' => $item['type'] === 'income',
+                        ],
+                        $invoice,
+                        $item['installment_number'] ?? 1,
+                        $item['installment_total'] ?? 1,
+                    );
+                } else {
+                    Transaction::createPurchase([...$attributes, 'type' => $item['type']]);
+                }
             }
 
             $statementImport->update([
                 'status' => StatementImportStatus::Imported,
+                'reference_month' => $invoice?->reference_month,
                 'imported_at' => now(),
             ]);
         });
 
-        return Redirect::route('finance.accounts.show', $statementImport->account_id)
-            ->with('success', count($data['items']).' lançamento(s) importado(s) da fatura.');
+        $redirect = $invoice
+            ? Redirect::route('finance.invoices.show', $invoice->id)
+            : Redirect::route('finance.accounts.index');
+
+        return $redirect->with('success', count($data['items']).' lançamento(s) importado(s).');
     }
 
     private function runExtraction(StatementImport $import): void
@@ -127,15 +178,17 @@ class StatementImportController extends Controller
         try {
             $contents = Storage::get($import->file_path);
 
-            $items = (new StatementExtractor)->extract(
+            $result = (new StatementExtractor)->extract(
                 pdfContents: $contents,
                 filename: $import->original_filename,
                 categories: Category::orderBy('name')->get(),
+                kind: $import->kind,
             );
 
             $import->update([
                 'status' => StatementImportStatus::Extracted,
-                'items' => $items,
+                'items' => $result['items'],
+                'reference_month' => $result['reference_month'] ? $result['reference_month'].'-01' : null,
                 'error_message' => null,
                 'extracted_at' => now(),
             ]);
@@ -157,22 +210,58 @@ class StatementImportController extends Controller
     }
 
     /**
-     * Mark items that look like they've already been imported (same account,
-     * date and amount), so the review screen can warn before double-creating them.
+     * Accounts that can own an imported item: the bank's own accounts,
+     * including transient (passerby) ones, so the user can attribute each
+     * line to a person.
+     *
+     * @return Collection<int, array<string, mixed>>
+     */
+    private function ownerAccounts(StatementImport $import)
+    {
+        return Account::with('person')
+            ->whereNotIn('type', [AccountType::CreditCard, AccountType::Investment])
+            ->when($import->institution_id, fn ($query, $id) => $query->where('institution_id', $id))
+            ->whereNull('archived_at')
+            ->orderBy('name')
+            ->get()
+            ->map(fn (Account $account) => [
+                'id' => $account->id,
+                'name' => $account->name,
+                'transient' => $account->transient,
+                'person' => $account->person?->only(['id', 'name']),
+            ]);
+    }
+
+    /**
+     * Mark items that look like they've already been imported (same date,
+     * amount and description in the target invoice / bank accounts), so the
+     * review screen can warn before double-creating them.
      *
      * @param  array<int, array<string, mixed>>  $items
      * @return array<int, array<string, mixed>>
      */
-    private function flagDuplicates(Account $account, array $items): array
+    private function flagDuplicates(StatementImport $import, array $items): array
     {
-        $existing = Transaction::query()
-            ->where('account_id', $account->id)
+        $query = Transaction::query();
+
+        if ($import->kind === 'credit') {
+            $invoiceIds = $import->creditCard?->invoices()
+                ->when($import->reference_month, fn ($q, $month) => $q->whereDate('reference_month', $month))
+                ->pluck('id') ?? collect();
+
+            $query->whereIn('credit_card_invoice_id', $invoiceIds);
+        } else {
+            $query->whereNull('credit_card_invoice_id')
+                ->whereIn('account_id', Account::where('institution_id', $import->institution_id)->select('id'));
+        }
+
+        $existing = $query
             ->get(['date', 'amount', 'description'])
             ->map(fn ($t) => mb_strtolower($t->date->toDateString().'|'.$t->amount.'|'.trim($t->description)))
             ->flip();
 
         return array_map(function (array $item) use ($existing) {
-            $key = mb_strtolower($item['purchase_date'].'|'.$item['total_amount'].'|'.$item['description']);
+            $key = mb_strtolower($item['statement_date'].'|'.$item['amount'].'|'.$item['description']);
             $item['possible_duplicate'] = $existing->has($key);
 
             return $item;

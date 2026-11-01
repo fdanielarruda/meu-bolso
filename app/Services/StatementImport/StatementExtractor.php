@@ -13,15 +13,16 @@ use OpenAI\Laravel\Facades\OpenAI;
 use RuntimeException;
 
 /**
- * Reads a credit-card statement PDF with OpenAI and returns a normalized
- * list of line items (purchases, refunds, installments) ready for review.
+ * Reads a credit-card statement or a bank (debit) account statement PDF with
+ * OpenAI and returns a normalized list of line items ready for review.
  */
 class StatementExtractor
 {
     /**
-     * @return array<int, array<string, mixed>>
+     * @param  'credit'|'debit'  $kind
+     * @return array{reference_month: ?string, items: array<int, array<string, mixed>>}
      */
-    public function extract(string $pdfContents, string $filename, Collection $categories): array
+    public function extract(string $pdfContents, string $filename, Collection $categories, string $kind = 'credit'): array
     {
         if (! config('openai.api_key')) {
             throw new RuntimeException('OPENAI_API_KEY não configurada.');
@@ -30,7 +31,7 @@ class StatementExtractor
         try {
             $response = OpenAI::responses()->create([
                 'model' => config('services.openai.model'),
-                'instructions' => $this->systemPrompt(),
+                'instructions' => $this->systemPrompt($kind),
                 'input' => [[
                     'role' => 'user',
                     'content' => [
@@ -41,7 +42,7 @@ class StatementExtractor
                         ],
                         [
                             'type' => 'input_text',
-                            'text' => $this->userPrompt($categories),
+                            'text' => $this->userPrompt($categories, $kind),
                         ],
                     ],
                 ]],
@@ -71,16 +72,22 @@ class StatementExtractor
         $categoriesByName = $categories->keyBy(fn ($category) => mb_strtolower($category->name));
 
         try {
-            return collect($payload['items'])
-                ->map(fn (array $item) => $this->normalize($item, $categoriesByName))
+            $items = collect($payload['items'])
+                ->map(fn (array $item) => $this->normalize($item, $categoriesByName, $kind))
                 ->values()
                 ->all();
+
+            $referenceMonth = $kind === 'credit' && preg_match('/^\d{4}-\d{2}/', (string) ($payload['reference_month'] ?? ''))
+                ? substr($payload['reference_month'], 0, 7)
+                : null;
+
+            return ['reference_month' => $referenceMonth, 'items' => $items];
         } catch (\Throwable $exception) {
             throw new RuntimeException('A resposta da OpenAI veio com dados inválidos: '.$exception->getMessage(), previous: $exception);
         }
     }
 
-    private function normalize(array $item, Collection $categoriesByName): array
+    private function normalize(array $item, Collection $categoriesByName, string $kind): array
     {
         $amount = number_format((float) ($item['amount'] ?? 0), 2, '.', '');
         $date = Carbon::parse($item['date']);
@@ -91,7 +98,7 @@ class StatementExtractor
         $installmentTotal = isset($item['installment_total']) ? max(1, min(48, (int) $item['installment_total'])) : null;
         $installmentNumber = isset($item['installment_number']) ? max(1, (int) $item['installment_number']) : null;
 
-        $hasInstallments = $installmentTotal && $installmentTotal > 1 && $installmentNumber;
+        $hasInstallments = $kind === 'credit' && $installmentTotal && $installmentTotal > 1 && $installmentNumber;
 
         $purchaseDate = $hasInstallments
             ? $date->copy()->subMonthsNoOverflow($installmentNumber - 1)
@@ -115,24 +122,54 @@ class StatementExtractor
         ];
     }
 
-    private function systemPrompt(): string
+    private function systemPrompt(string $kind): string
     {
-        return <<<'PROMPT'
-            Você é um assistente que extrai lançamentos de faturas de cartão de crédito
-            brasileiras a partir de arquivos PDF, para importação em um sistema de
+        $document = $kind === 'debit'
+            ? 'extratos de conta corrente/débito'
+            : 'faturas de cartão de crédito';
+
+        return <<<PROMPT
+            Você é um assistente que extrai lançamentos de {$document}
+            brasileiros a partir de arquivos PDF, para importação em um sistema de
             controle financeiro pessoal. Seja preciso e completo: não invente dados que
             não estejam no documento e não deixe de fora nenhum lançamento individual.
             PROMPT;
     }
 
-    private function userPrompt(Collection $categories): string
+    private function userPrompt(Collection $categories, string $kind): string
     {
         $categoryList = $categories->isEmpty()
             ? 'nenhuma categoria cadastrada'
             : $categories->map(fn ($c) => "\"{$c->name}\" ({$c->type->label()})")->implode(', ');
 
+        $categoryRule = <<<PROMPT
+            - "category_name" deve ser exatamente um dos nomes desta lista, apenas quando
+              houver correspondência clara pelo nome do estabelecimento; caso contrário,
+              null. Categorias disponíveis: {$categoryList}.
+            PROMPT;
+
+        if ($kind === 'debit') {
+            return <<<PROMPT
+                Leia o extrato de conta bancária (débito) em anexo e liste TODAS as
+                movimentações individuais (Pix, TED/DOC, débitos, compras no débito, tarifas,
+                depósitos, rendimentos, etc.).
+
+                Regras:
+                - NÃO inclua linhas de resumo, como saldo anterior, saldo do dia, saldo final
+                  ou totais do período.
+                - "amount" é sempre um número positivo.
+                - "type" é "income" para entradas (dinheiro recebido na conta) e "expense"
+                  para saídas.
+                - "date" é a data da movimentação no formato AAAA-MM-DD (use o período do
+                  extrato para inferir o ano quando a linha só tiver dia/mês).
+                - "installment_number" e "installment_total" devem ser sempre null.
+                - "reference_month" deve ser sempre null.
+                {$categoryRule}
+                PROMPT;
+        }
+
         return <<<PROMPT
-            Leia o extrato de cartão de crédito em anexo e liste TODOS os lançamentos
+            Leia a fatura de cartão de crédito em anexo e liste TODOS os lançamentos
             individuais (compras, assinaturas, estornos/créditos) que aparecem na fatura.
 
             Regras:
@@ -149,9 +186,9 @@ class StatementExtractor
             - "date" é a data do lançamento como aparece na fatura, no formato AAAA-MM-DD
               (use o mês/ano de referência da fatura para inferir o ano quando a linha só
               tiver dia/mês).
-            - "category_name" deve ser exatamente um dos nomes desta lista, apenas quando
-              houver correspondência clara pelo nome do estabelecimento; caso contrário,
-              null. Categorias disponíveis: {$categoryList}.
+            - "reference_month" é o mês (AAAA-MM) do VENCIMENTO desta fatura; se não
+              for possível determinar, null.
+            {$categoryRule}
             PROMPT;
     }
 
@@ -160,6 +197,7 @@ class StatementExtractor
         return [
             'type' => 'object',
             'properties' => [
+                'reference_month' => ['type' => ['string', 'null'], 'description' => 'Formato AAAA-MM'],
                 'items' => [
                     'type' => 'array',
                     'items' => [
@@ -181,7 +219,7 @@ class StatementExtractor
                     ],
                 ],
             ],
-            'required' => ['items'],
+            'required' => ['reference_month', 'items'],
             'additionalProperties' => false,
         ];
     }

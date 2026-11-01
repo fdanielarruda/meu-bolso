@@ -8,11 +8,11 @@ import SelectInput from '@/Components/SelectInput.vue';
 import TextInput from '@/Components/TextInput.vue';
 import { categoryTreeOptions, formatMoney } from '@/finance';
 import { Head, Link, useForm } from '@inertiajs/vue3';
-import { computed, reactive } from 'vue';
+import { computed, reactive, ref } from 'vue';
 
 const props = defineProps({
     statementImport: Object,
-    account: Object,
+    owners: Array,
     items: Array,
     categories: Array,
 });
@@ -20,12 +20,15 @@ const props = defineProps({
 const categoryOptions = computed(() => categoryTreeOptions(props.categories));
 
 function buildRows() {
+    const defaultOwner = props.statementImport.credit_card?.payment_account_id;
+    const defaultAccountId = props.owners.some((o) => o.id === defaultOwner) ? defaultOwner : '';
+
     return props.items.map((item) => ({
         include: !item.possible_duplicate,
+        account_id: defaultAccountId,
         description: item.description,
-        date: item.purchase_date,
-        amount: item.total_amount,
-        per_installment_amount: item.amount,
+        date: item.statement_date,
+        amount: item.amount,
         type: item.type,
         category_id: item.category_id ?? '',
         installment_number: item.installment_number,
@@ -35,6 +38,25 @@ function buildRows() {
 }
 
 const rows = reactive(buildRows());
+const referenceMonth = ref(props.statementImport.reference_month ?? '');
+const bulkOwner = ref('');
+const showTransient = ref(true);
+
+const isCredit = computed(() => props.statementImport.kind === 'credit');
+
+const visibleOwners = computed(() => props.owners.filter((o) => showTransient.value || !o.transient));
+
+function ownerLabel(owner) {
+    return `${owner.person?.name ?? 'Sem pessoa'} — ${owner.name}${owner.transient ? ' (transeunte)' : ''}`;
+}
+
+function applyBulkOwner(onlyEmpty) {
+    if (!bulkOwner.value) return;
+
+    for (const row of rows) {
+        if (row.include && (!onlyEmpty || !row.account_id)) row.account_id = bulkOwner.value;
+    }
+}
 
 function restoreOriginal() {
     if (confirm('Descartar os ajustes feitos e voltar à extração original?')) {
@@ -45,6 +67,8 @@ function restoreOriginal() {
 const isImported = computed(() => props.statementImport.status === 'imported');
 const isFailed = computed(() => props.statementImport.status === 'failed');
 
+const missingOwnerCount = computed(() => rows.filter((r) => r.include && !r.account_id).length);
+
 const includedCount = computed(() => rows.filter((r) => r.include).length);
 const includedTotal = computed(() =>
     rows
@@ -53,17 +77,20 @@ const includedTotal = computed(() =>
         .toFixed(2),
 );
 
-const confirmForm = useForm({ items: [] });
+const confirmForm = useForm({ reference_month: '', items: [] });
 
 function submit() {
+    confirmForm.reference_month = isCredit.value ? referenceMonth.value : '';
     confirmForm.items = rows
         .filter((r) => r.include)
         .map((r) => ({
+            account_id: r.account_id,
             description: r.description,
             date: r.date,
             amount: r.amount,
             type: r.type,
             category_id: r.category_id || null,
+            installment_number: r.installment_number,
             installment_total: r.installment_total,
         }));
 
@@ -85,7 +112,9 @@ function reextract() {
     <AuthenticatedLayout>
         <template #header>
             <h2 class="text-xl font-semibold leading-tight text-gray-800">
-                Revisar lançamentos — {{ account.name }}
+                Revisar lançamentos — {{ statementImport.institution?.name }}
+                <span v-if="statementImport.credit_card">· {{ statementImport.credit_card.name }}</span>
+                <span v-else-if="!isCredit">· Débito</span>
             </h2>
         </template>
 
@@ -130,10 +159,40 @@ function reextract() {
 
                 <template v-else>
                     <p class="text-sm text-gray-600">
-                        Confira os lançamentos extraídos da fatura. Compras parceladas já incluem todas as parcelas
-                        futuras, lançadas automaticamente nas faturas seguintes. Desmarque ou ajuste o que não
-                        estiver correto antes de confirmar.
+                        Confira tudo o que foi extraído do PDF e escolha o dono de cada lançamento. Nada é gravado
+                        até você confirmar.
+                        <template v-if="isCredit">
+                            Compras parceladas têm as parcelas seguintes criadas automaticamente nas próximas faturas.
+                        </template>
+                        Desmarque ou ajuste o que não estiver correto.
                     </p>
+
+                    <div v-if="!isImported" class="flex flex-wrap items-end gap-4 rounded-lg bg-white p-4 shadow">
+                        <div v-if="isCredit">
+                            <label class="block text-xs font-medium uppercase text-gray-500">Mês da fatura</label>
+                            <TextInput v-model="referenceMonth" type="month" class="mt-1 block" />
+                            <InputError class="mt-1" :message="confirmForm.errors.reference_month" />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium uppercase text-gray-500">Definir dono em lote</label>
+                            <div class="mt-1 flex gap-2">
+                                <SelectInput v-model="bulkOwner" class="block">
+                                    <option value="">Selecione o dono</option>
+                                    <option v-for="o in visibleOwners" :key="o.id" :value="o.id">{{ ownerLabel(o) }}</option>
+                                </SelectInput>
+                                <SecondaryButton type="button" :disabled="!bulkOwner" @click="applyBulkOwner(true)">
+                                    Preencher vazios
+                                </SecondaryButton>
+                                <SecondaryButton type="button" :disabled="!bulkOwner" @click="applyBulkOwner(false)">
+                                    Aplicar a todos
+                                </SecondaryButton>
+                            </div>
+                        </div>
+                        <label class="flex items-center gap-2 text-sm text-gray-600">
+                            <input v-model="showTransient" type="checkbox" class="rounded border-gray-300 text-indigo-600" />
+                            Mostrar transeuntes
+                        </label>
+                    </div>
 
                     <InputError :message="confirmForm.errors.items" />
 
@@ -147,8 +206,9 @@ function reextract() {
                                 <tr>
                                     <th class="px-3 py-3"></th>
                                     <th class="px-3 py-3">Descrição</th>
-                                    <th class="px-3 py-3">Data da compra</th>
-                                    <th class="px-3 py-3">Valor total</th>
+                                    <th class="px-3 py-3">Dono</th>
+                                    <th class="px-3 py-3">Data</th>
+                                    <th class="px-3 py-3">Valor</th>
                                     <th class="px-3 py-3">Tipo</th>
                                     <th class="px-3 py-3">Categoria</th>
                                 </tr>
@@ -171,11 +231,28 @@ function reextract() {
                                         <TextInput v-model="row.description" class="block w-56" :disabled="!row.include || isImported" />
                                         <p v-if="row.installment_total" class="mt-1 text-xs text-gray-500">
                                             Parcela {{ row.installment_number }}/{{ row.installment_total }} ·
-                                            {{ formatMoney(row.per_installment_amount) }} por mês
+                                            parcela do mês
                                         </p>
                                         <p v-if="row.possible_duplicate" class="mt-1 text-xs font-medium text-amber-700">
                                             Possível duplicata de um lançamento já existente
                                         </p>
+                                    </td>
+                                    <td class="px-3 py-2 align-top">
+                                        <SelectInput
+                                            v-model="row.account_id"
+                                            class="block w-52"
+                                            :class="row.include && !row.account_id ? 'border-red-400' : ''"
+                                            :disabled="!row.include || isImported"
+                                        >
+                                            <option value="" disabled>Selecione o dono</option>
+                                            <option
+                                                v-for="o in owners.filter((o) => showTransient || !o.transient || o.id === row.account_id)"
+                                                :key="o.id"
+                                                :value="o.id"
+                                            >
+                                                {{ ownerLabel(o) }}
+                                            </option>
+                                        </SelectInput>
                                     </td>
                                     <td class="px-3 py-2 align-top">
                                         <TextInput v-model="row.date" type="date" class="block" :disabled="!row.include || isImported" />
@@ -193,7 +270,7 @@ function reextract() {
                                     <td class="px-3 py-2 align-top">
                                         <SelectInput v-model="row.type" class="block" :disabled="!row.include || isImported">
                                             <option value="expense">Despesa</option>
-                                            <option value="income">Receita</option>
+                                            <option value="income">{{ isCredit ? 'Estorno' : 'Receita' }}</option>
                                         </SelectInput>
                                     </td>
                                     <td class="px-3 py-2 align-top">
@@ -211,10 +288,13 @@ function reextract() {
                         <div class="text-sm text-gray-600">
                             {{ includedCount }} de {{ rows.length }} selecionado(s) · total líquido
                             {{ formatMoney(includedTotal) }}
+                            <span v-if="missingOwnerCount > 0" class="ml-2 font-medium text-red-600">
+                                · {{ missingOwnerCount }} sem dono
+                            </span>
                         </div>
                         <div class="flex gap-3">
                             <SecondaryButton type="button" @click="restoreOriginal">Restaurar extração original</SecondaryButton>
-                            <PrimaryButton :disabled="confirmForm.processing || includedCount === 0" @click="submit">
+                            <PrimaryButton :disabled="confirmForm.processing || includedCount === 0 || missingOwnerCount > 0" @click="submit">
                                 Importar selecionados ({{ includedCount }})
                             </PrimaryButton>
                         </div>

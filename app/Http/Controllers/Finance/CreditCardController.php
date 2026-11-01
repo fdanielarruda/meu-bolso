@@ -43,7 +43,7 @@ class CreditCardController extends Controller
                     'starts_at' => $card->starts_at?->format('Y-m'),
                     'not_started' => $notStarted,
                     'open_invoice_total' => $invoice?->total() ?? '0.00',
-                    'available_limit' => $card->availableLimit(),
+                    'available_limit' => $card->availableLimit($month),
                     'current_invoice_id' => $invoice?->id,
                     'due_date' => $invoice?->due_date,
                     'invoice_status' => $invoice?->status,

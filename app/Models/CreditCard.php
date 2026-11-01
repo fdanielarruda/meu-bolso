@@ -49,25 +49,51 @@ class CreditCard extends Model
         return $this->currentInvoice()?->total() ?? '0.00';
     }
 
-    public function availableLimit(): string
+    /**
+     * Limit minus what is still owed from the given month onward: that
+     * month's unpaid invoice plus the remaining installments of later ones.
+     * Recurring charges only count in the given month itself, since they're
+     * pre-generated 24 months ahead and would otherwise eat the limit many
+     * times over. Months before the card's "starts counting at" (starts_at)
+     * and earlier than the given month are ignored.
+     */
+    public function availableLimit(?CarbonInterface $month = null): string
     {
-        $unpaidTotal = $this->invoices()
-            ->where('status', '!=', InvoiceStatus::Paid)
-            ->get()
-            ->reduce(fn ($carry, $invoice) => Money::add($carry, $invoice->total()), '0.00');
+        $from = ($month ?? Carbon::now())->copy()->startOfMonth();
 
-        return Money::sub($this->credit_limit, $unpaidTotal);
+        if ($this->starts_at && $this->starts_at->copy()->startOfMonth()->gt($from)) {
+            $from = $this->starts_at->copy()->startOfMonth();
+        }
+
+        $used = $this->invoices()
+            ->where('status', '!=', InvoiceStatus::Paid)
+            ->whereDate('reference_month', '>=', $from->toDateString())
+            ->with('transactions')
+            ->get()
+            ->flatMap(fn ($invoice) => $invoice->transactions->filter(
+                fn ($transaction) => ! $transaction->is_recurring || $invoice->reference_month->isSameMonth($from)
+            ))
+            ->reduce(fn (string $carry, $transaction) => $transaction->reversed
+                ? Money::sub($carry, $transaction->amount)
+                : Money::add($carry, $transaction->amount), '0.00');
+
+        return Money::sub($this->credit_limit, $used);
     }
 
     /**
      * Find (or create) the invoice a purchase made on the given date belongs to.
-     * Purchases made after the closing day roll over to next month's invoice.
+     * Purchases made after the closing day roll over to the next closing cycle.
+     * An invoice is identified by the month it is due (see invoiceForMonth()).
      */
     public function resolveInvoiceFor(CarbonInterface $date): CreditCardInvoice
     {
-        $referenceMonth = $date->day > $this->closing_day
+        $closingMonth = $date->day > $this->closing_day
             ? $date->copy()->startOfMonth()->addMonthNoOverflow()
             : $date->copy()->startOfMonth();
+
+        $referenceMonth = $this->due_day > $this->closing_day
+            ? $closingMonth
+            : $closingMonth->copy()->addMonthNoOverflow();
 
         return $this->invoiceForMonth($referenceMonth);
     }
@@ -75,7 +101,9 @@ class CreditCard extends Model
     /**
      * Find (or create) the invoice for a given reference month directly,
      * used when navigating the invoice month-by-month or fanning out
-     * installments to specific past/future invoices.
+     * installments to specific past/future invoices. The reference month is
+     * the month the invoice is due, so it matches the "vencimento" shown
+     * on the card; the closing date falls the same month or the one before.
      */
     public function invoiceForMonth(CarbonInterface $month): CreditCardInvoice
     {
@@ -84,10 +112,10 @@ class CreditCard extends Model
         return $this->invoices()->firstOrCreate(
             ['reference_month' => $referenceMonth->toDateString()],
             [
-                'closing_date' => $this->dayInMonth($referenceMonth, $this->closing_day),
-                'due_date' => $this->due_day > $this->closing_day
-                    ? $this->dayInMonth($referenceMonth, $this->due_day)
-                    : $this->dayInMonth($referenceMonth->copy()->addMonthNoOverflow(), $this->due_day),
+                'closing_date' => $this->due_day > $this->closing_day
+                    ? $this->dayInMonth($referenceMonth, $this->closing_day)
+                    : $this->dayInMonth($referenceMonth->copy()->subMonthNoOverflow(), $this->closing_day),
+                'due_date' => $this->dayInMonth($referenceMonth, $this->due_day),
                 'status' => InvoiceStatus::Open,
             ]
         );
