@@ -25,6 +25,7 @@ Route::middleware(['auth', 'verified'])->prefix('finance')->name('finance.')->gr
 
     Route::get('transactions/quick', [TransactionController::class, 'quick'])->name('transactions.quick');
     Route::get('transactions/recent-by-bank', [TransactionController::class, 'recentByBank'])->name('transactions.recent-by-bank');
+    Route::get('transactions/account-history', [TransactionController::class, 'accountHistory'])->name('transactions.account-history');
     Route::resource('transactions', TransactionController::class)->except(['show', 'create', 'edit'])->names('transactions');
 
     Route::get('transactions-classification', [TransactionClassificationController::class, 'index'])->name('transaction-classification.index');

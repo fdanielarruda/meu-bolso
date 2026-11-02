@@ -14,10 +14,28 @@ import { computed, ref } from 'vue';
 const props = defineProps({
     cards: Array,
     institutions: Array,
+    people: Array,
     month: String,
+    personId: Number,
 });
 
-const visibleCards = computed(() => props.cards.filter((card) => !card.not_started));
+const selectedPersonId = ref(props.personId ?? '');
+
+const selectedPerson = computed(() => props.people.find((p) => p.id === Number(selectedPersonId.value)) ?? null);
+
+const startedCards = computed(() => props.cards.filter((card) => !card.not_started));
+
+/* With a person selected, only cards where they have something on this month's invoice. */
+const visibleCards = computed(() =>
+    selectedPerson.value ? startedCards.value.filter((card) => Number(card.person_total) !== 0) : startedCards.value
+);
+
+const personGrandTotal = computed(() => visibleCards.value.reduce((sum, card) => sum + Number(card.person_total ?? 0), 0));
+
+function invoiceUrl(card) {
+    const url = route('finance.invoices.show', card.current_invoice_id);
+    return selectedPerson.value ? `${url}?person_id=${selectedPerson.value.id}` : url;
+}
 
 function addMonths(monthString, delta) {
     const [year, month] = monthString.split('-').map(Number);
@@ -32,8 +50,16 @@ function monthLabel(monthString) {
     return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
 }
 
+function reload(monthString) {
+    router.get(
+        route('finance.credit-cards.index'),
+        { month: monthString, person_id: selectedPersonId.value || undefined },
+        { preserveState: true, preserveScroll: true }
+    );
+}
+
 function goToMonth(monthString) {
-    router.get(route('finance.credit-cards.index'), { month: monthString }, { preserveState: true, preserveScroll: true });
+    reload(monthString);
 }
 
 const showModal = ref(false);
@@ -111,13 +137,27 @@ function submit() {
                             →
                         </button>
                     </div>
-                    <PrimaryButton @click="openCreate">Novo cartão</PrimaryButton>
+                    <div class="flex items-center gap-3">
+                        <SelectInput v-model="selectedPersonId" class="block w-44" @change="reload(month)">
+                            <option value="">Todas as pessoas</option>
+                            <option v-for="p in people" :key="p.id" :value="p.id">{{ p.name }}</option>
+                        </SelectInput>
+                        <PrimaryButton @click="openCreate">Novo cartão</PrimaryButton>
+                    </div>
+                </div>
+
+                <div
+                    v-if="selectedPerson"
+                    class="flex items-center justify-between rounded-lg bg-indigo-50 px-5 py-3 text-sm text-indigo-900"
+                >
+                    <span>Total</span>
+                    <strong class="text-base">{{ formatMoney(personGrandTotal) }}</strong>
                 </div>
 
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div v-for="card in visibleCards" :key="card.id" class="rounded-lg bg-white p-5 shadow">
                         <div class="flex items-start justify-between">
-                            <Link :href="route('finance.invoices.show', card.current_invoice_id)" class="hover:text-indigo-600">
+                            <Link :href="invoiceUrl(card)" class="hover:text-indigo-600">
                                 <p class="flex items-center gap-2 text-sm text-gray-500">
                                     {{ card.institution?.name ?? 'Dinheiro' }} / {{ card.name }}
                                     <span
@@ -127,7 +167,11 @@ function submit() {
                                         Paga
                                     </span>
                                 </p>
-                                <p class="mt-2 text-2xl font-semibold text-gray-900">{{ formatMoney(card.open_invoice_total) }}</p>
+                                <template v-if="selectedPerson">
+                                    <p class="mt-2 text-2xl font-semibold text-gray-900">{{ formatMoney(card.person_total) }}</p>
+                                    <p class="text-xs text-gray-500">de {{ formatMoney(card.open_invoice_total) }} da fatura</p>
+                                </template>
+                                <p v-else class="mt-2 text-2xl font-semibold text-gray-900">{{ formatMoney(card.open_invoice_total) }}</p>
                             </Link>
                             <button class="text-sm text-indigo-600 hover:text-indigo-900" @click="openEdit(card)">Editar</button>
                         </div>
@@ -138,7 +182,11 @@ function submit() {
                     </div>
 
                     <p v-if="visibleCards.length === 0" class="text-sm text-gray-500">
-                        Nenhum cartão de crédito cadastrado ainda.
+                        {{
+                            selectedPerson
+                                ? `${selectedPerson.name} não tem gastos nos cartões em ${monthLabel(month)}.`
+                                : 'Nenhum cartão de crédito cadastrado ainda.'
+                        }}
                     </p>
                 </div>
             </div>

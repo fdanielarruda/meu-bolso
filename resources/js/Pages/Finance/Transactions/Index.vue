@@ -16,25 +16,31 @@ const props = defineProps({
     transactions: Object,
     accounts: Array,
     institutions: Array,
+    people: Array,
     categories: Array,
     filters: Object,
 });
 
 const categoryOptions = computed(() => categoryTreeOptions(props.categories));
 
-function firstDayOfMonth() {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+function toIsoDate(date) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-function lastDayOfMonth() {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+function firstDayOfMonth(base = new Date()) {
+    return toIsoDate(new Date(base.getFullYear(), base.getMonth(), 1));
+}
+
+function lastDayOfMonth(base = new Date()) {
+    return toIsoDate(new Date(base.getFullYear(), base.getMonth() + 1, 0));
 }
 
 const filters = reactive({
+    q: props.filters.q ?? '',
     institution_id: props.filters.institution_id ?? '',
     account_id: props.filters.account_id ?? '',
+    person_id: props.filters.person_id ?? '',
     category_id: props.filters.category_id ?? '',
     from: props.filters.from ?? firstDayOfMonth(),
     to: props.filters.to ?? lastDayOfMonth(),
@@ -43,10 +49,88 @@ const filters = reactive({
     max_amount: props.filters.max_amount ?? '',
 });
 
+const kindOptions = [
+    { value: '', label: 'Tudo' },
+    { value: 'credit_card', label: 'Cartão' },
+    { value: 'account', label: 'Conta' },
+    { value: 'transfers', label: 'Transferências e trocas' },
+];
+
+function setKind(value) {
+    filters.kind = value;
+    applyFilters();
+}
+
+/* ---------- Período ---------- */
+
+/* The month being shown, when the range is exactly one full month. */
+const selectedMonth = computed(() => {
+    if (!filters.from) return null;
+    const start = new Date(filters.from + 'T00:00:00');
+    return filters.from === firstDayOfMonth(start) && filters.to === lastDayOfMonth(start) ? start : null;
+});
+
+const showCustomPeriod = ref(!selectedMonth.value);
+
+const periodLabel = computed(() => {
+    if (selectedMonth.value) {
+        const label = selectedMonth.value.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+        return label.charAt(0).toUpperCase() + label.slice(1);
+    }
+    if (filters.from && filters.to) return `${formatDate(filters.from)} até ${formatDate(filters.to)}`;
+    if (filters.from) return `A partir de ${formatDate(filters.from)}`;
+    if (filters.to) return `Até ${formatDate(filters.to)}`;
+    return 'Todo o período';
+});
+
+function goToMonth(offset) {
+    const base = selectedMonth.value ?? (filters.from ? new Date(filters.from + 'T00:00:00') : new Date());
+    const target = new Date(base.getFullYear(), base.getMonth() + offset, 1);
+    filters.from = firstDayOfMonth(target);
+    filters.to = lastDayOfMonth(target);
+    showCustomPeriod.value = false;
+    applyFilters();
+}
+
+function goToCurrentMonth() {
+    filters.from = firstDayOfMonth();
+    filters.to = lastDayOfMonth();
+    showCustomPeriod.value = false;
+    applyFilters();
+}
+
+function accountOptionLabel(account) {
+    const extra = accountExtra(account);
+    return `${personLabel(account)} · ${bankLabel(account)}${extra ? ` (${extra})` : ''}`;
+}
+
+/* ---------- Busca e limpeza ---------- */
+
+let searchTimeout = null;
+
+watch(
+    () => filters.q,
+    () => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(applyFilters, 350);
+    }
+);
+
+const resettableFilters = ['q', 'institution_id', 'account_id', 'person_id', 'category_id', 'kind', 'min_amount', 'max_amount'];
+
+const activeFilterCount = computed(() => resettableFilters.filter((key) => filters[key] !== '' && filters[key] !== null).length);
+
+function clearFilters() {
+    for (const key of resettableFilters) filters[key] = '';
+    applyFilters();
+}
+
 const accountsForFilterBank = computed(() =>
-    filters.institution_id === ''
-        ? props.accounts
-        : props.accounts.filter((a) => a.institution?.id === Number(filters.institution_id))
+    props.accounts.filter(
+        (a) =>
+            (filters.institution_id === '' || a.institution?.id === Number(filters.institution_id)) &&
+            (filters.person_id === '' || a.person?.id === Number(filters.person_id))
+    )
 );
 
 function applyFilters() {
@@ -58,7 +142,7 @@ if (!props.filters.from && !props.filters.to) {
 }
 
 watch(
-    () => filters.institution_id,
+    () => [filters.institution_id, filters.person_id],
     () => {
         if (!accountsForFilterBank.value.some((a) => a.id === Number(filters.account_id))) {
             filters.account_id = '';
@@ -67,7 +151,11 @@ watch(
 );
 
 function destroyTransaction(transaction) {
-    if (confirm('Remover este lançamento?')) {
+    const message = transaction.transfer_id
+        ? 'Remover esta transferência? Os dois lados (saída e entrada) serão removidos.'
+        : 'Remover este lançamento?';
+
+    if (confirm(message)) {
         useForm({}).delete(route('finance.transactions.destroy', transaction.id), { preserveScroll: true });
     }
 }
@@ -200,8 +288,65 @@ function submitEditTransfer() {
     });
 }
 
-function bankLabel(transaction) {
-    return transaction.account.institution?.name ?? 'Dinheiro';
+function bankLabel(account) {
+    return account?.institution?.name ?? 'Dinheiro';
+}
+
+function personLabel(account) {
+    return account?.person?.name ?? account?.name ?? '?';
+}
+
+/* Account name only when it says something beyond the person (e.g. "Poupança"). */
+function accountExtra(account) {
+    return account && account.name !== account.person?.name ? account.name : null;
+}
+
+function cardLabel(invoice) {
+    const card = invoice?.credit_card;
+    return card ? `Cartão ${card.institution?.name ?? card.name}` : 'Cartão';
+}
+
+function invoiceMonthLabel(invoice) {
+    if (!invoice?.reference_month) return '';
+    const date = new Date(invoice.reference_month.slice(0, 10) + 'T00:00:00');
+    return date.toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }).replace('. de ', '/').replace(' de ', '/');
+}
+
+const genericDescriptions = ['troca', 'transferência', 'transação', 'pagamento de fatura'];
+
+function hasCustomDescription(transaction) {
+    return !genericDescriptions.includes((transaction.description ?? '').trim().toLowerCase());
+}
+
+/*
+ * What kind of line this is, so the list can explain itself:
+ * swap/transfer (money moving between accounts, shown once per transfer),
+ * card (purchase on a credit card invoice), invoice_payment, or a plain
+ * account movement.
+ */
+function rowKind(transaction) {
+    if (transaction.transfer_id) {
+        return (transaction.description ?? '').trim().toLowerCase().startsWith('troca') ? 'swap' : 'transfer';
+    }
+    if (transaction.credit_card_invoice_id) return 'card';
+    if (transaction.invoice_payment_id) return 'invoice_payment';
+    return 'account';
+}
+
+const kindBadges = {
+    swap: { label: 'Troca', class: 'bg-amber-100 text-amber-800' },
+    transfer: { label: 'Transferência', class: 'bg-indigo-100 text-indigo-700' },
+    card: { label: 'Cartão', class: 'bg-purple-100 text-purple-700' },
+    invoice_payment: { label: 'Pagamento de fatura', class: 'bg-gray-100 text-gray-700' },
+    account: null,
+};
+
+function excludedFromReports(transaction) {
+    return (
+        transaction.exclude_from_reports ||
+        !!transaction.invoice_payment_id ||
+        (!!transaction.transfer_id && transaction.transfer?.is_movement_only)
+    );
 }
 
 /* ---------- Conferência (checklist local) ---------- */
@@ -239,18 +384,45 @@ function toggleChecked(transaction) {
     checkedIds.value = next;
 }
 
+/*
+ * A transfer has two legs (the "out" on one account and the "in" on the
+ * other); show it once, keeping the outgoing leg when both are on the page.
+ */
+const visibleTransactions = computed(() => {
+    const seenTransfers = new Map();
+    const result = [];
+
+    for (const transaction of props.transactions.data) {
+        if (!transaction.transfer_id) {
+            result.push(transaction);
+            continue;
+        }
+
+        const index = seenTransfers.get(transaction.transfer_id);
+
+        if (index === undefined) {
+            seenTransfers.set(transaction.transfer_id, result.length);
+            result.push(transaction);
+        } else if (transaction.type === 'expense') {
+            result[index] = transaction;
+        }
+    }
+
+    return result;
+});
+
 const allChecked = computed(
-    () => props.transactions.data.length > 0 && props.transactions.data.every((t) => checkedIds.value.has(t.id))
+    () => visibleTransactions.value.length > 0 && visibleTransactions.value.every((t) => checkedIds.value.has(t.id))
 );
 
 function toggleCheckAll() {
-    checkedIds.value = allChecked.value ? new Set() : new Set(props.transactions.data.map((t) => t.id));
+    checkedIds.value = allChecked.value ? new Set() : new Set(visibleTransactions.value.map((t) => t.id));
 }
 
 const groupedByDay = computed(() => {
     const groups = new Map();
 
-    for (const transaction of props.transactions.data) {
+    for (const transaction of visibleTransactions.value) {
         const key = transaction.date.slice(0, 10);
 
         if (!groups.has(key)) {
@@ -275,81 +447,170 @@ const groupedByDay = computed(() => {
         <div class="py-12">
             <div class="mx-auto max-w-6xl space-y-6 sm:px-6 lg:px-8">
                 <div class="space-y-4 rounded-lg bg-white p-5 shadow">
-                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <!-- Período -->
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div class="flex items-center gap-1">
+                            <button
+                                type="button"
+                                class="rounded-md px-2.5 py-1.5 text-lg leading-none text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                                title="Mês anterior"
+                                @click="goToMonth(-1)"
+                            >
+                                ‹
+                            </button>
+                            <span class="min-w-[11rem] text-center text-base font-semibold text-gray-800">{{ periodLabel }}</span>
+                            <button
+                                type="button"
+                                class="rounded-md px-2.5 py-1.5 text-lg leading-none text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                                title="Próximo mês"
+                                @click="goToMonth(1)"
+                            >
+                                ›
+                            </button>
+                        </div>
+                        <div class="flex items-center gap-3 text-sm">
+                            <button type="button" class="text-indigo-600 hover:text-indigo-800" @click="goToCurrentMonth">
+                                Mês atual
+                            </button>
+                            <button type="button" class="text-gray-500 hover:text-gray-800" @click="showCustomPeriod = !showCustomPeriod">
+                                {{ showCustomPeriod ? 'Fechar período' : 'Escolher datas' }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div v-if="showCustomPeriod" class="grid grid-cols-2 gap-4 sm:max-w-md">
+                        <div>
+                            <InputLabel value="De" />
+                            <TextInput v-model="filters.from" type="date" class="mt-1 block w-full" @change="applyFilters" />
+                        </div>
+                        <div>
+                            <InputLabel value="Até" />
+                            <TextInput v-model="filters.to" type="date" class="mt-1 block w-full" @change="applyFilters" />
+                        </div>
+                    </div>
+
+                    <!-- Busca + tipo -->
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+                        <TextInput v-model="filters.q" type="search" placeholder="Buscar pela descrição…" class="block w-full sm:max-w-xs" />
+                        <div class="flex flex-wrap gap-1 rounded-lg bg-gray-100 p-1">
+                            <button
+                                v-for="option in kindOptions"
+                                :key="option.value"
+                                type="button"
+                                class="rounded-md px-3 py-1.5 text-sm transition"
+                                :class="
+                                    filters.kind === option.value
+                                        ? 'bg-white font-medium text-gray-900 shadow-sm'
+                                        : 'text-gray-600 hover:text-gray-900'
+                                "
+                                @click="setKind(option.value)"
+                            >
+                                {{ option.label }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Quem / onde / o quê -->
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                        <div>
+                            <InputLabel value="Pessoa" />
+                            <SelectInput v-model="filters.person_id" class="mt-1 block w-full" @change="applyFilters">
+                                <option value="">Todas</option>
+                                <option v-for="p in people" :key="p.id" :value="p.id">{{ p.name }}</option>
+                            </SelectInput>
+                        </div>
+
                         <div>
                             <InputLabel value="Banco" />
                             <SelectInput v-model="filters.institution_id" class="mt-1 block w-full" @change="applyFilters">
-                                <option value="">Todos os bancos</option>
+                                <option value="">Todos</option>
                                 <option v-for="i in institutions" :key="i.id" :value="i.id">{{ i.name }}</option>
                             </SelectInput>
                         </div>
 
                         <div>
                             <InputLabel value="Conta" />
-                            <SelectInput
-                                v-model="filters.account_id"
-                                class="mt-1 block w-full disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
-                                :disabled="!filters.institution_id"
-                                @change="applyFilters"
-                            >
-                                <option value="">
-                                    {{ filters.institution_id ? 'Todas as contas' : 'Selecione um banco' }}
+                            <SelectInput v-model="filters.account_id" class="mt-1 block w-full" @change="applyFilters">
+                                <option value="">Todas</option>
+                                <option v-for="a in accountsForFilterBank" :key="a.id" :value="a.id">
+                                    {{ accountOptionLabel(a) }}
                                 </option>
-                                <option v-for="a in accountsForFilterBank" :key="a.id" :value="a.id">{{ a.name }}</option>
                             </SelectInput>
                         </div>
 
                         <div>
                             <InputLabel value="Categoria" />
                             <SelectInput v-model="filters.category_id" class="mt-1 block w-full" @change="applyFilters">
-                                <option value="">Todas as categorias</option>
+                                <option value="">Todas</option>
                                 <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ c.label }}</option>
                             </SelectInput>
                         </div>
 
                         <div>
-                            <InputLabel value="Tipo" />
-                            <SelectInput v-model="filters.kind" class="mt-1 block w-full" @change="applyFilters">
-                                <option value="">Todos</option>
-                                <option value="credit_card">Cartão de crédito</option>
-                                <option value="transactions">Transações</option>
-                            </SelectInput>
-                        </div>
-
-                        <div>
-                            <InputLabel value="De" />
-                            <TextInput v-model="filters.from" type="date" class="mt-1 block w-full" @change="applyFilters" />
-                        </div>
-
-                        <div>
-                            <InputLabel value="Até" />
-                            <TextInput v-model="filters.to" type="date" class="mt-1 block w-full" @change="applyFilters" />
-                        </div>
-
-                        <div>
-                            <InputLabel value="Valor mínimo" />
-                            <TextInput
-                                v-model="filters.min_amount"
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                class="mt-1 block w-full"
-                                @change="applyFilters"
-                            />
-                        </div>
-
-                        <div>
-                            <InputLabel value="Valor máximo" />
-                            <TextInput
-                                v-model="filters.max_amount"
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                class="mt-1 block w-full"
-                                @change="applyFilters"
-                            />
+                            <InputLabel value="Valor (R$)" />
+                            <div class="mt-1 flex items-center gap-2">
+                                <TextInput
+                                    v-model="filters.min_amount"
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    placeholder="mín."
+                                    class="block w-full"
+                                    @change="applyFilters"
+                                />
+                                <span class="text-gray-400">–</span>
+                                <TextInput
+                                    v-model="filters.max_amount"
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    placeholder="máx."
+                                    class="block w-full"
+                                    @change="applyFilters"
+                                />
+                            </div>
                         </div>
                     </div>
+
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-sm text-gray-500">
+                        <span>
+                            {{ transactions.total }} {{ transactions.total === 1 ? 'lançamento' : 'lançamentos' }}
+                            <template v-if="activeFilterCount">
+                                · {{ activeFilterCount }} {{ activeFilterCount === 1 ? 'filtro ativo' : 'filtros ativos' }}
+                            </template>
+                        </span>
+                        <button v-if="activeFilterCount" type="button" class="text-red-600 hover:text-red-800" @click="clearFilters">
+                            Limpar filtros
+                        </button>
+                    </div>
+
+                    <details class="text-sm text-gray-600">
+                        <summary class="cursor-pointer select-none text-gray-500 hover:text-gray-700">
+                            O que significa cada tipo?
+                        </summary>
+                        <dl class="mt-3 grid gap-2 sm:grid-cols-2">
+                            <div>
+                                <dt><span class="rounded bg-purple-100 px-1.5 py-0.5 text-[11px] font-semibold text-purple-700">Cartão</span></dt>
+                                <dd class="mt-1">Compra feita no cartão de crédito. Entra na fatura do mês indicado, não sai da conta na hora.</dd>
+                            </div>
+                            <div>
+                                <dt><span class="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold text-gray-700">Pagamento de fatura</span></dt>
+                                <dd class="mt-1">Saída da conta para pagar a fatura do cartão. Fica fora dos relatórios, porque as compras já foram contadas.</dd>
+                            </div>
+                            <div>
+                                <dt><span class="rounded bg-indigo-100 px-1.5 py-0.5 text-[11px] font-semibold text-indigo-700">Transferência</span></dt>
+                                <dd class="mt-1">Dinheiro que passou de uma conta para outra (de quem → para quem). Não é gasto nem receita.</dd>
+                            </div>
+                            <div>
+                                <dt><span class="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">Troca</span></dt>
+                                <dd class="mt-1">Acerto de dívida entre duas pessoas em dois bancos: A paga B em um banco e B paga A no outro. Aparecem duas linhas, uma para cada lado, que se anulam.</dd>
+                            </div>
+                            <div class="sm:col-span-2">
+                                <dt class="font-medium text-gray-700">Sem selo</dt>
+                                <dd class="mt-1">Entrada ou saída normal da conta (Pix, débito, salário…).</dd>
+                            </div>
+                        </dl>
+                    </details>
                 </div>
 
                 <div class="overflow-hidden bg-white shadow sm:rounded-lg">
@@ -367,53 +628,74 @@ const groupedByDay = computed(() => {
                                 :key="transaction.id"
                                 class="flex items-center justify-between px-4 py-3 sm:px-6"
                             >
-                                <div class="flex items-center gap-3">
+                                <div class="flex min-w-0 items-center gap-3">
                                     <Checkbox :checked="isChecked(transaction)" @update:checked="toggleChecked(transaction)" />
-                                    <div>
-                                    <p class="text-gray-900">
-                                        {{ transaction.description }}
-                                        <span v-if="transaction.installment_total" class="text-xs text-gray-500">
-                                            ({{ transaction.installment_number }}/{{ transaction.installment_total }})
-                                        </span>
-                                        <span
-                                            v-if="transaction.transfer_id"
-                                            class="ml-1 rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-indigo-700"
-                                        >
-                                            Transferência
-                                        </span>
-                                        <span
-                                            v-if="transaction.transfer_id && transaction.transfer?.is_movement_only"
-                                            class="ml-1 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-gray-600"
-                                        >
-                                            Não conta no relatório
-                                        </span>
-                                        <span
-                                            v-if="transaction.exclude_from_reports"
-                                            class="ml-1 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-gray-600"
-                                        >
-                                            Não conta no relatório
-                                        </span>
-                                        <span
-                                            v-if="transaction.invoice_payment_id"
-                                            class="ml-1 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-gray-600"
-                                        >
-                                            Pagamento de fatura · não conta no relatório
-                                        </span>
-                                        <span
-                                            v-if="transaction.is_unknown"
-                                            class="ml-1 rounded bg-yellow-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-yellow-700"
-                                        >
-                                            Desconhecida
-                                        </span>
-                                    </p>
-                                    <p class="text-xs text-gray-500">
-                                        {{ bankLabel(transaction) }} / {{ transaction.account.name }}
-                                        <template v-if="transaction.category"> · {{ transaction.category.name }}</template>
-                                    </p>
+                                    <div class="min-w-0">
+                                        <p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-gray-900">
+                                            <span
+                                                v-if="kindBadges[rowKind(transaction)]"
+                                                class="rounded px-1.5 py-0.5 text-[11px] font-semibold"
+                                                :class="kindBadges[rowKind(transaction)].class"
+                                            >
+                                                {{ kindBadges[rowKind(transaction)].label }}
+                                            </span>
+
+                                            <!-- Transfers/swaps: who paid whom -->
+                                            <template v-if="transaction.transfer">
+                                                <span>
+                                                    {{ personLabel(transaction.transfer.from_account) }}
+                                                    <span class="text-gray-400">→</span>
+                                                    {{ personLabel(transaction.transfer.to_account) }}
+                                                </span>
+                                                <span v-if="hasCustomDescription(transaction)" class="text-gray-500">
+                                                    · {{ transaction.description }}
+                                                </span>
+                                            </template>
+                                            <span v-else>{{ transaction.description }}</span>
+
+                                            <span v-if="transaction.installment_total" class="text-xs text-gray-500">
+                                                parcela {{ transaction.installment_number }}/{{ transaction.installment_total }}
+                                            </span>
+                                            <span
+                                                v-if="transaction.is_unknown"
+                                                class="rounded bg-yellow-100 px-1.5 py-0.5 text-[11px] font-semibold text-yellow-700"
+                                            >
+                                                Desconhecida
+                                            </span>
+                                        </p>
+
+                                        <p class="mt-0.5 text-xs text-gray-500">
+                                            <template v-if="transaction.transfer">
+                                                {{ bankLabel(transaction.transfer.from_account) }}
+                                                <span class="text-gray-400">→</span>
+                                                {{ bankLabel(transaction.transfer.to_account) }}
+                                            </template>
+                                            <template v-else-if="rowKind(transaction) === 'card'">
+                                                {{ personLabel(transaction.account) }}
+                                                · {{ cardLabel(transaction.credit_card_invoice) }}
+                                                · fatura de {{ invoiceMonthLabel(transaction.credit_card_invoice) }}
+                                            </template>
+                                            <template v-else>
+                                                {{ personLabel(transaction.account) }} · {{ bankLabel(transaction.account) }}
+                                                <template v-if="accountExtra(transaction.account)">
+                                                    ({{ accountExtra(transaction.account) }})
+                                                </template>
+                                                <template v-if="transaction.invoice_payment">
+                                                    · paga a fatura do {{ cardLabel(transaction.invoice_payment) }}
+                                                </template>
+                                            </template>
+                                            <template v-if="transaction.category"> · {{ transaction.category.name }}</template>
+                                            <span v-if="excludedFromReports(transaction)" class="italic text-gray-400">
+                                                · fora dos relatórios
+                                            </span>
+                                        </p>
                                     </div>
                                 </div>
-                                <div class="flex items-center gap-3">
-                                    <span :class="transaction.type === 'income' ? 'text-green-600' : 'text-red-600'">
+                                <div class="flex shrink-0 items-center gap-3">
+                                    <span v-if="transaction.transfer" class="text-gray-600">
+                                        {{ formatMoney(transaction.amount) }}
+                                    </span>
+                                    <span v-else :class="transaction.type === 'income' ? 'text-green-600' : 'text-red-600'">
                                         {{ transaction.type === 'income' ? '+' : '-' }}{{ formatMoney(transaction.amount) }}
                                     </span>
                                     <button class="text-sm text-indigo-600 hover:text-indigo-900" @click="openEdit(transaction)">

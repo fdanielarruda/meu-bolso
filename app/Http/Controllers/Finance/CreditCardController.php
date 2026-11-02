@@ -5,7 +5,10 @@ namespace App\Http\Controllers\Finance;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Finance\StoreCreditCardRequest;
 use App\Models\CreditCard;
+use App\Models\CreditCardInvoice;
 use App\Models\Institution;
+use App\Models\Person;
+use App\Support\Money;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Redirect;
@@ -27,8 +30,10 @@ class CreditCardController extends Controller
 
         $month = $month->min(\App\Models\Transaction::recurringCapMonth());
 
+        $personId = $request->integer('person_id') ?: null;
+
         $cards = $userCards
-            ->map(function (CreditCard $card) use ($month) {
+            ->map(function (CreditCard $card) use ($month, $personId) {
                 $notStarted = $card->isBeforeStartMonth($month);
                 $invoice = $notStarted ? null : $card->invoiceForMonth($month);
 
@@ -47,14 +52,31 @@ class CreditCardController extends Controller
                     'current_invoice_id' => $invoice?->id,
                     'due_date' => $invoice?->due_date,
                     'invoice_status' => $invoice?->status,
+                    'person_total' => $personId && $invoice ? $this->personShare($invoice, $personId) : null,
                 ];
             });
 
         return Inertia::render('Finance/CreditCards/Index', [
             'cards' => $cards,
             'institutions' => Institution::orderBy('name')->get(),
+            'people' => Person::whereNull('archived_at')->orderBy('name')->get(),
             'month' => $month->format('Y-m'),
+            'personId' => $personId,
         ]);
+    }
+
+    /**
+     * One person's part of an invoice: their purchases minus their reversals,
+     * mirroring CreditCardInvoice::total().
+     */
+    private function personShare(CreditCardInvoice $invoice, int $personId): string
+    {
+        $query = fn () => $invoice->transactions()->whereHas('account', fn ($q) => $q->where('person_id', $personId));
+
+        $charges = (string) $query()->where('reversed', false)->sum('amount');
+        $credits = (string) $query()->where('reversed', true)->sum('amount');
+
+        return Money::sub($charges, $credits);
     }
 
     /**

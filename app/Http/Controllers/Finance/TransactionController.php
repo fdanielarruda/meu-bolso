@@ -7,6 +7,7 @@ use App\Http\Requests\Finance\StoreTransactionRequest;
 use App\Models\Account;
 use App\Models\Category;
 use App\Models\Institution;
+use App\Models\Person;
 use App\Models\Transaction;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
@@ -51,7 +52,7 @@ class TransactionController extends Controller
                     ? $q->where('institution_id', $institutionId)
                     : $q->whereNull('institution_id');
             })
-            ->with(['account', 'category', 'transfer.fromAccount', 'transfer.toAccount'])
+            ->with(['account.person', 'category', 'transfer.fromAccount', 'transfer.toAccount'])
             ->orderByDesc('date')
             ->orderByDesc('id')
             ->limit(50)
@@ -64,25 +65,84 @@ class TransactionController extends Controller
         return response()->json(['transactions' => $transactions]);
     }
 
+    /**
+     * Paginated history of one account for the quick-entry balances panel,
+     * optionally narrowed to some kinds of movement:
+     * account (plain in/out), card, invoice_payment, transfer, swap.
+     */
+    public function accountHistory(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $request->validate([
+            'account_id' => ['required', 'integer'],
+            'kinds' => ['array'],
+            'kinds.*' => ['in:account,card,invoice_payment,transfer,swap'],
+            'include_future' => ['boolean'],
+        ]);
+
+        $account = Account::findOrFail($request->integer('account_id'));
+        $kinds = $request->input('kinds', []);
+
+        $transactions = $account->transactions()
+            ->with([
+                'account.institution', 'account.person', 'category',
+                'transfer.fromAccount.institution', 'transfer.toAccount.institution',
+                'transfer.fromAccount.person', 'transfer.toAccount.person',
+                'creditCardInvoice.creditCard.institution', 'invoicePayment.creditCard.institution',
+            ])
+            // Recurring card purchases are generated up to two years ahead and
+            // would otherwise bury everything that actually happened.
+            ->when(! $request->boolean('include_future'), fn ($q) => $q->whereDate('date', '<=', now()))
+            ->when($kinds !== [], fn ($q) => $q->where(function ($q) use ($kinds) {
+                if (in_array('account', $kinds)) {
+                    $q->orWhere(fn ($q) => $q->whereNull('transfer_id')->whereNull('credit_card_invoice_id')->whereNull('invoice_payment_id'));
+                }
+                if (in_array('card', $kinds)) {
+                    $q->orWhereNotNull('credit_card_invoice_id');
+                }
+                if (in_array('invoice_payment', $kinds)) {
+                    $q->orWhereNotNull('invoice_payment_id');
+                }
+                if (in_array('transfer', $kinds)) {
+                    $q->orWhere(fn ($q) => $q->whereNotNull('transfer_id')->where('description', 'not like', 'Troca%'));
+                }
+                if (in_array('swap', $kinds)) {
+                    $q->orWhere(fn ($q) => $q->whereNotNull('transfer_id')->where('description', 'like', 'Troca%'));
+                }
+            }))
+            ->orderByDesc('date')
+            ->orderByDesc('id')
+            ->paginate(min($request->integer('per_page', 20) ?: 20, 100));
+
+        return response()->json($transactions);
+    }
+
     public function index(Request $request): Response
     {
         $transactions = Transaction::query()
             ->with([
                 'account.institution', 'account.person', 'category',
                 'transfer.fromAccount.institution', 'transfer.toAccount.institution',
+                'transfer.fromAccount.person', 'transfer.toAccount.person',
+                'creditCardInvoice.creditCard.institution', 'invoicePayment.creditCard.institution',
             ])
             ->when($request->filled('account_id'), fn ($q) => $q->where('account_id', $request->integer('account_id')))
             ->when($request->filled('institution_id'), fn ($q) => $q->whereHas(
                 'account',
                 fn ($accountQuery) => $accountQuery->where('institution_id', $request->integer('institution_id'))
             ))
+            ->when($request->filled('person_id'), fn ($q) => $q->whereHas(
+                'account',
+                fn ($accountQuery) => $accountQuery->where('person_id', $request->integer('person_id'))
+            ))
             ->when($request->filled('category_id'), fn ($q) => $q->where('category_id', $request->integer('category_id')))
+            ->when($request->filled('q'), fn ($q) => $q->where('description', 'like', '%'.$request->input('q').'%'))
             ->when($request->filled('from'), fn ($q) => $q->whereDate('date', '>=', $request->date('from')))
             ->when($request->filled('to'), fn ($q) => $q->whereDate('date', '<=', $request->date('to')))
             ->when($request->filled('min_amount'), fn ($q) => $q->where('amount', '>=', $request->input('min_amount')))
             ->when($request->filled('max_amount'), fn ($q) => $q->where('amount', '<=', $request->input('max_amount')))
             ->when($request->input('kind') === 'credit_card', fn ($q) => $q->whereNotNull('credit_card_invoice_id'))
-            ->when($request->input('kind') === 'transactions', fn ($q) => $q->whereNull('credit_card_invoice_id'))
+            ->when($request->input('kind') === 'account', fn ($q) => $q->whereNull('credit_card_invoice_id')->whereNull('transfer_id'))
+            ->when($request->input('kind') === 'transfers', fn ($q) => $q->whereNotNull('transfer_id'))
             ->orderByDesc('date')
             ->orderByDesc('id')
             ->paginate(25)
@@ -92,8 +152,9 @@ class TransactionController extends Controller
             'transactions' => $transactions,
             'accounts' => Account::with(['institution', 'person'])->whereNull('archived_at')->orderBy('name')->get(),
             'institutions' => Institution::orderBy('name')->get(),
+            'people' => Person::whereNull('archived_at')->orderBy('name')->get(),
             'categories' => Category::orderBy('name')->get(),
-            'filters' => $request->only(['account_id', 'institution_id', 'category_id', 'from', 'to', 'kind', 'min_amount', 'max_amount']),
+            'filters' => $request->only(['account_id', 'institution_id', 'person_id', 'category_id', 'q', 'from', 'to', 'kind', 'min_amount', 'max_amount']),
         ]);
     }
 

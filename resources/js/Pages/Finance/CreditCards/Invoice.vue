@@ -31,7 +31,8 @@ const visibleAccounts = computed(() => props.accounts.filter((a) => showTransien
 
 /* ---------- Filtro por pessoa ---------- */
 
-const selectedPersonId = ref('');
+// Pre-selected when coming from the cards list filtered by person.
+const selectedPersonId = ref(Number(new URLSearchParams(window.location.search).get('person_id')) || '');
 
 const people = computed(() => {
     const seen = new Map();
